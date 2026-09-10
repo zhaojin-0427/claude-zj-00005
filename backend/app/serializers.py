@@ -1,6 +1,8 @@
 """Lightweight dict serializers (joins are easier than deep ORM nests here)."""
+import json
 from datetime import datetime
 from . import content
+from . import plansvc
 
 
 def venue_dict(v):
@@ -37,12 +39,14 @@ def booking_dict(b, slot=None, member=None, coach=None, session=None, profile=No
         "focus_parts": b.focus_parts, "focus_parts_list": parts,
         "focus_parts_labels": [content.PARTS.get(p, p) for p in parts],
         "limitations": b.limitations, "template_id": b.template_id,
+        "plan_unit_id": b.plan_unit.id if b.plan_unit else None,
         "created_at": b.created_at, "canceled_at": b.canceled_at,
         "slot": slot_dict(slot or b.slot) if (slot or b.slot) else None,
         "member": _user_brief(member) if member else _user_brief(getattr(b, "_member", None)),
         "coach": _user_brief(coach) if coach else None,
         "has_session": session is not None or b.session is not None,
         "session": None,
+        "plan_unit": plan_unit_brief(b.plan_unit) if b.plan_unit else None,
     }
     s = session or b.session
     if s:
@@ -152,3 +156,71 @@ def coach_dict(u):
         "years_exp": cp.years_exp if cp else 1,
         "rating": cp.rating if cp else 4.8,
     }
+
+
+# ---------------------------------------------------------------- cycle plans
+def plan_unit_brief(u, with_booking: bool = False) -> dict:
+    """约课/简报场景使用的单元精简信息。"""
+    d = {
+        "id": u.id, "plan_id": u.plan_id, "week_no": u.week_no,
+        "scheduled_date": u.scheduled_date, "title": u.title,
+        "goal": u.goal, "goal_label": content.GOALS.get(u.goal, u.goal) if u.goal else "",
+        "focus_parts": u.focus_parts,
+        "focus_parts_list": [p for p in (u.focus_parts or "").split(",") if p],
+        "focus_parts_labels": [content.PARTS.get(p, p)
+                               for p in (u.focus_parts or "").split(",") if p],
+        "planned_exercises_json": u.planned_exercises_json,
+        "planned_note": u.planned_note,
+        "status": u.status, "status_label": content.UNIT_STATUS.get(u.status, u.status),
+        "booking_id": u.booking_id,
+        "completion_rate": u.completion_rate,
+        "planned_volume": u.planned_volume,
+        "actual_volume": u.actual_volume,
+    }
+    if with_booking and u.booking and u.booking.slot:
+        d["booking"] = {
+            "id": u.booking.id,
+            "start_time": u.booking.slot.start_time,
+            "status": u.booking.status,
+        }
+    return d
+
+
+def plan_unit_dict(u, detail: bool = False) -> dict:
+    """日历/详情使用的完整单元信息（含执行快照与逐动作对比）。"""
+    d = plan_unit_brief(u, with_booking=True)
+    d["weekday"] = u.weekday
+    d["snapshot_at"] = u.snapshot_at
+    d["actual_exercises_json"] = u.actual_exercises_json
+    d["actual_rpe"] = u.actual_rpe
+    d["coach_note"] = u.coach_note
+    if detail and u.status == content.UNIT_COMPLETED:
+        cmp_ = plansvc.compute_comparison(
+            plansvc.parse_exercises(u.planned_exercises_json),
+            plansvc.parse_exercises(u.actual_exercises_json))
+        d["comparison"] = cmp_
+    return d
+
+
+def plan_dict(p, member=None, coach=None, template=None, now=None) -> dict:
+    d = {
+        "id": p.id, "member_id": p.member_id, "coach_id": p.coach_id,
+        "template_id": p.template_id,
+        "name": p.name, "goal": p.goal,
+        "goal_label": content.GOALS.get(p.goal, p.goal) if p.goal else "",
+        "weeks": p.weeks, "start_date": p.start_date, "end_date": p.end_date,
+        "note": p.note, "status": p.status,
+        "status_label": content.PLAN_STATUS.get(p.status, p.status),
+        "created_at": p.created_at, "published_at": p.published_at,
+        "member": _user_brief(member) if member else None,
+        "coach": _user_brief(coach) if coach else None,
+        "template_name": template.name if template else None,
+        "summary": plansvc.plan_summary(p, now=now),
+    }
+    return d
+
+
+def plan_detail_dict(p, member=None, coach=None, template=None, now=None) -> dict:
+    d = plan_dict(p, member=member, coach=coach, template=template, now=now)
+    d["units"] = [plan_unit_dict(u, detail=True) for u in p.units]
+    return d

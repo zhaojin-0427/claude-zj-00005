@@ -109,6 +109,8 @@ class Booking(Base):
 
     slot: Mapped[Slot] = relationship()
     session: Mapped["TrainingSession"] = relationship(back_populates="booking", uselist=False, cascade="all, delete-orphan")
+    # 约课时可关联的周期计划训练单元（FK 在 plan_units 一侧）
+    plan_unit: Mapped["PlanUnit"] = relationship(back_populates="booking", uselist=False)
 
 
 class TrainingSession(Base):
@@ -179,3 +181,67 @@ class PlanTemplate(Base):
     exercises_json: Mapped[str] = mapped_column(Text, default="[]")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class CyclePlan(Base):
+    """教练基于训练模板为会员发布的 4~12 周周期训练计划。
+
+    模板在创建时仅用于复制动作清单, 之后模板修改不影响计划;
+    已完课单元的计划内容会冻结到 plan_units 的执行快照中。
+    """
+    __tablename__ = "cycle_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    coach_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("plan_templates.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(100))
+    goal: Mapped[str] = mapped_column(String(30), default="")
+    weeks: Mapped[int] = mapped_column(Integer)
+    start_date: Mapped[datetime] = mapped_column(Date)
+    end_date: Mapped[datetime] = mapped_column(Date)
+    note: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(12), default="published", index=True)
+    # draft / published / archived
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    units: Mapped[list["PlanUnit"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan",
+        order_by="PlanUnit.week_no, PlanUnit.weekday, PlanUnit.id")
+
+
+class PlanUnit(Base):
+    """周期计划内的一个训练单元（周次 × 日期）。
+
+    完课后 planned_exercises_json 被冻结为执行快照, planned_volume/completion
+    随之固化, 与计划/模板的后续修改完全隔离。
+    """
+    __tablename__ = "plan_units"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("cycle_plans.id"), index=True)
+    week_no: Mapped[int] = mapped_column(Integer)        # 1..weeks
+    weekday: Mapped[int] = mapped_column(Integer, default=0)
+    scheduled_date: Mapped[datetime] = mapped_column(Date, index=True)
+    title: Mapped[str] = mapped_column(String(100), default="")
+    goal: Mapped[str] = mapped_column(String(30), default="")
+    focus_parts: Mapped[str] = mapped_column(String(200), default="")  # csv
+    # 计划动作清单（可编辑, 直到完课冻结为快照）
+    planned_exercises_json: Mapped[str] = mapped_column(Text, default="[]")
+    planned_note: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(12), default="unscheduled", index=True)
+    # unscheduled / booked / completed / missed / no_show
+    booking_id: Mapped[int | None] = mapped_column(ForeignKey("bookings.id"), unique=True, nullable=True)
+
+    # ---- 执行快照与偏差复盘（完课时写入）----
+    snapshot_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    actual_exercises_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actual_rpe: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_rate: Mapped[float | None] = mapped_column(Float, nullable=True)   # 动作完成率 %
+    planned_volume: Mapped[float | None] = mapped_column(Float, nullable=True)    # kg
+    actual_volume: Mapped[float | None] = mapped_column(Float, nullable=True)     # kg
+    coach_note: Mapped[str] = mapped_column(Text, default="")
+
+    plan: Mapped[CyclePlan] = relationship(back_populates="units")
+    booking: Mapped[Booking | None] = relationship(back_populates="plan_unit", uselist=False)

@@ -168,6 +168,7 @@ class BookingCreate(BaseModel):
     focus_parts: list[str] = []
     limitations: str = ""
     template_id: int | None = None
+    plan_unit_id: int | None = None
 
 
 class BookingOut(ORMModel):
@@ -281,6 +282,40 @@ class TemplateOut(ORMModel):
     exercises_json: str
     created_by: int | None
     created_at: datetime
+
+
+# ---------- cycle plans ----------
+class PlanUnitIn(BaseModel):
+    week_no: int = Field(ge=1, le=12)
+    scheduled_date: date
+    title: str = ""
+    goal: str = ""
+    focus_parts: list[str] = []
+    exercises: list[ExerciseItem] = []
+    note: str = ""
+
+
+class CyclePlanIn(BaseModel):
+    member_id: int
+    coach_id: int | None = None        # 教练创建默认本人; 管理员可指定
+    template_id: int | None = None
+    name: str = Field(min_length=1, max=100)
+    goal: str = ""
+    weeks: int = Field(ge=4, le=12)
+    start_date: date
+    note: str = ""
+    status: str = "published"          # published / draft
+    units: list[PlanUnitIn] = []
+
+
+class PlanUnitPatch(BaseModel):
+    """未安排单元的计划内容编辑（完课后快照不可改）。"""
+    title: str | None = None
+    goal: str | None = None
+    focus_parts: list[str] | None = None
+    exercises: list[ExerciseItem] | None = None
+    note: str | None = None
+    scheduled_date: date | None = None
 
 
 MemberOut.model_rebuild()

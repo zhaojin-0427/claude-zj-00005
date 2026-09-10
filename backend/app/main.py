@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine, SessionLocal
-from .routers import auth, members, resources, bookings, templates, measurements, stats, content as content_router
+from .routers import auth, members, resources, bookings, templates, measurements, stats, content as content_router, plans
 
 Base.metadata.create_all(bind=engine)
 
@@ -23,6 +23,7 @@ app.include_router(bookings.router)
 app.include_router(templates.router)
 app.include_router(measurements.router)
 app.include_router(stats.router)
+app.include_router(plans.router)
 app.include_router(content_router.router)
 
 

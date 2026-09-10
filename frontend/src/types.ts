@@ -36,10 +36,12 @@ export interface CoachProfile {
 }
 
 export interface AlertItem {
-  type: 'goal_achieved' | 'low_sessions' | 'next_focus'
+  type: 'goal_achieved' | 'low_sessions' | 'next_focus' | 'plan_overdue'
   message: string
   cycle_days?: number
   title?: string
+  count?: number
+  upcoming_count?: number
 }
 
 export interface Option { key: string; label: string }
@@ -127,6 +129,7 @@ export interface Booking {
   focus_parts_labels: string[]
   limitations: string
   template_id: number | null
+  plan_unit_id: number | null
   created_at: string
   canceled_at: string | null
   slot: { id: number; start_time: string; end_time: string; venue: Venue | null } | null
@@ -134,6 +137,7 @@ export interface Booking {
   coach?: { id: number; full_name: string } | null
   has_session: boolean
   session: TrainingSession | null
+  plan_unit?: PlanUnitBrief | null
 }
 
 export interface Measurement {
@@ -210,6 +214,8 @@ export interface Package {
 export interface Brief {
   booking: Booking
   template: PlanTemplate | null
+  plan_unit: PlanUnitBrief | null
+  plan_info: PlanInfoBrief | null
   profile: MemberProfile | null
   measurements: Measurement[]
   measurement_diff: Record<string, number>
@@ -217,6 +223,157 @@ export interface Brief {
   prev_session: TrainingSession | null
   leftover_question: string
   goals: Goal[]
+}
+
+export interface PlanInfoBrief {
+  id: number
+  name: string
+  weeks: number
+  week_no: number
+  scheduled_date: string
+  unit_title: string
+}
+
+export type UnitStatus = 'unscheduled' | 'booked' | 'completed' | 'missed' | 'no_show'
+
+export interface PlanUnitBrief {
+  id: number
+  plan_id: number
+  week_no: number
+  scheduled_date: string
+  title: string
+  goal: string
+  goal_label: string
+  focus_parts: string
+  focus_parts_list: string[]
+  focus_parts_labels: string[]
+  planned_exercises_json: string
+  planned_note: string
+  status: UnitStatus
+  status_label: string
+  booking_id: number | null
+  completion_rate: number | null
+  planned_volume: number | null
+  actual_volume: number | null
+  plan_name?: string
+  booking?: { id: number; start_time: string; status: string }
+}
+
+export interface ComparisonRow {
+  name: string
+  part: string
+  planned_sets: number
+  planned_reps: string
+  planned_weight: number
+  planned_volume: number
+  actual_sets: number | null
+  actual_reps: string | null
+  actual_weight: number | null
+  actual_volume: number | null
+  done: boolean
+}
+
+export interface PlanUnit extends PlanUnitBrief {
+  weekday: number
+  snapshot_at: string | null
+  actual_exercises_json: string | null
+  actual_rpe: number | null
+  coach_note: string
+  comparison?: {
+    rows: ComparisonRow[]
+    extras: { name: string; part: string; sets: number; reps: string; weight: number; volume: number }[]
+    completion_rate: number
+    planned_count: number
+    matched_count: number
+    planned_volume: number
+    actual_volume: number
+  }
+}
+
+export interface PlanSummary {
+  total_units: number
+  completed_units: number
+  booked_units: number
+  unscheduled_units: number
+  no_show_units: number
+  missed_units: number
+  overdue_units: number
+  completion_rate: number
+  avg_exercise_completion: number | null
+  planned_volume: number
+  actual_volume: number
+  current_week: number | null
+  state: 'draft' | 'not_started' | 'in_progress' | 'finished' | 'archived'
+  state_label: string
+}
+
+export interface CyclePlan {
+  id: number
+  member_id: number
+  coach_id: number
+  template_id: number | null
+  name: string
+  goal: string
+  goal_label: string
+  weeks: number
+  start_date: string
+  end_date: string
+  note: string
+  status: 'draft' | 'published' | 'archived'
+  status_label: string
+  created_at: string
+  published_at: string | null
+  member?: { id: number; full_name: string; phone: string; role: string } | null
+  coach?: { id: number; full_name: string } | null
+  template_name: string | null
+  summary: PlanSummary
+  units?: PlanUnit[]
+}
+
+export interface PlanUnitInput {
+  week_no: number
+  scheduled_date: string
+  title: string
+  goal: string
+  focus_parts: string[]
+  exercises: ExerciseItem[]
+  note: string
+}
+
+export interface CyclePlanInput {
+  member_id: number
+  coach_id?: number
+  template_id?: number | null
+  name: string
+  goal: string
+  weeks: number
+  start_date: string
+  note?: string
+  status: 'published' | 'draft'
+  units: PlanUnitInput[]
+}
+
+export interface OverdueUnitAlert {
+  plan_id: number
+  unit_id: number
+  member_id: number
+  member_name: string
+  plan_name: string
+  unit_title: string
+  scheduled_date: string
+  days_overdue: number
+}
+
+export interface LowCompletionAlert {
+  plan_id: number
+  member_id: number
+  member_name: string
+  plan_name: string
+  weeks: number
+  completion_rate: number
+  completed_units: number
+  total_units: number
+  avg_exercise_completion: number | null
 }
 
 export interface DashboardStats {
@@ -239,6 +396,17 @@ export interface DashboardStats {
   part_frequency: { part: string; label: string; exercise_count: number; session_count: number }[]
   avg_rpe: number | null
   rpe_trend: { date: string; rpe: number; member_id: number }[]
+  // 周期计划复盘
+  cycle_plan_count?: number
+  due_units?: number
+  completed_plan_units?: number
+  no_show_plan_units?: number
+  missed_plan_units?: number
+  plan_completion_rate?: number
+  plan_no_show_rate?: number
+  plan_planned_volume?: number
+  plan_actual_volume?: number
+  plan_volume_trend?: { date: string; actual_volume: number; planned_volume: number }[]
 }
 
 export interface Workbench {
@@ -247,4 +415,8 @@ export interface Workbench {
   month_completed: number
   today_count: number
   week_count: number
+  plan_alerts?: {
+    overdue_units: OverdueUnitAlert[]
+    low_completion_plans: LowCompletionAlert[]
+  }
 }

@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, date, time
 from sqlalchemy import select, func
 from .database import Base, engine
 from . import models as M
+from . import content, plansvc
 from .security import hash_password
-from . import content
 
 rng = random.Random(20260910)
 
@@ -199,6 +199,10 @@ def seed_if_empty(db):
 
     # 每位会员被占用的课时(已完成+爽约+待上课); 取消不占用
     occupied: dict[int, int] = defaultdict(int)
+    # 周期计划种子用: 每位会员的完课记录 (booking, slot, actual_exs, part)
+    completed_by_member: dict[int, list] = defaultdict(list)
+    # 周期计划种子用: 爽约记录 (booking, slot, goal, parts)
+    noshow_by_member: dict[int, list] = defaultdict(list)
 
     def make_slot(coach, day, hour, venue):
         start = datetime.combine(day, time(hour, 0))
@@ -257,16 +261,20 @@ def seed_if_empty(db):
                     next_focus=NEXT_FOCUS_BANK[session_seq % len(NEXT_FOCUS_BANK)],
                     created_at=slot.start_time,
                 ))
+                completed_by_member[u.id].append((b, slot, exs, part))
                 session_seq += 1
             elif roll < 0.82:  # 爽约(计入排课与课耗, 但不计入课时利用)
                 u, goal, parts, _, _ = member_users[rng.randrange(len(member_users))]
                 occupied[u.id] += 1
                 slot.status = content.SLOT_NO_SHOW
-                db.add(M.Booking(member_id=u.id, coach_id=coach.id, slot_id=slot.id,
+                b = M.Booking(member_id=u.id, coach_id=coach.id, slot_id=slot.id,
                                  status=content.BK_NO_SHOW, goal=goal,
                                  focus_parts=",".join(parts[:2]),
                                  limitations=LIMITATIONS_BANK[u.username],
-                                 created_at=slot.start_time - timedelta(hours=5)))
+                                 created_at=slot.start_time - timedelta(hours=5))
+                db.add(b)
+                db.flush()
+                noshow_by_member[u.id].append((b, slot, goal, parts))
             elif roll < 0.90:  # 取消 -> 时段释放后无人再约
                 slot.status = content.SLOT_OPEN
                 u, goal, parts, _, _ = member_users[rng.randrange(len(member_users))]
@@ -344,4 +352,189 @@ def seed_if_empty(db):
             db.add(M.Package(member_id=u.id, total_sessions=total_first, remaining=buffer,
                              price=300 * total_first, purchased_at=NOW - timedelta(days=78)))
 
+    # ---- 周期训练计划: 4 名会员各一份 8 周计划 ----
+    _seed_cycle_plans(db, member_users, templates, tmpl_by_goal, coach_users,
+                      completed_by_member, noshow_by_member, venues)
+
     db.commit()
+
+
+def _seed_cycle_plans(db, member_users, templates, tmpl_by_goal, coach_users,
+                      completed_by_member, noshow_by_member, venues):
+    """为 4 名演示会员生成 8 周周期计划并挂载已完课/爽约/未安排单元。"""
+    def tpl_exercises(tpl):
+        try:
+            return json.loads(tpl.exercises_json or "[]")
+        except ValueError:
+            return []
+
+    def planned_from(actual_exs, goal, parts):
+        """根据实际动作构造计划动作（负重略低, 演示训练量差值）。"""
+        planned = [{
+            "name": e["name"], "part": e["part"],
+            "sets": e["sets"], "reps": e["reps"],
+            "weight": round(max(0, e["weight"] - rng.choice([0, 2.5, 5])), 1),
+            "note": e.get("note", ""),
+        } for e in actual_exs]
+        return planned
+
+    def planned_with_gap(actual_exs, goal, parts):
+        """在实际动作基础上补一个实际未完成的计划动作, 制造完成率 <100% 的偏差。"""
+        planned = planned_from(actual_exs, goal, parts)
+        done_names = {plansvc.norm_name(e["name"]) for e in actual_exs}
+        gap_part = rng.choice(parts)
+        for name2, variant, base_w in content.EXERCISE_LIBRARY.get(gap_part, []):
+            if plansvc.norm_name(name2) not in done_names:
+                planned.append({"name": name2, "part": gap_part, "sets": 3,
+                                "reps": "10-12", "weight": base_w,
+                                "note": f"{variant}（计划补充，当次未完成）"})
+                break
+        return planned
+
+    # username -> (计划名, 未来已约单元数, 未来未安排单元数, 纯逾期未安排数)
+    plan_specs = {
+        "zhangwei": ("减脂周期训练计划（8周）", 2, 2, 2),
+        "wangqiang": ("增肌周期训练计划（8周）", 1, 2, 1),
+        "lina": ("翘臀塑形周期计划（8周）", 1, 1, 1),
+        "chenjing": ("下肢燃脂周期计划（8周）", 0, 2, 2),
+    }
+    weeks = 8
+    start_date = TODAY - timedelta(days=int(TODAY.weekday()) + 7 * (weeks - 3))
+
+    for (u, goal, parts, _, _) in member_users:
+        spec = plan_specs.get(u.username)
+        if not spec:
+            continue
+        plan_name, future_booked_n, future_unsched_n, missed_n = spec
+        tpl = tmpl_by_goal.get(goal) or templates[0]
+        coach_id = None
+        done = sorted(completed_by_member.get(u.id, []), key=lambda x: x[1].start_time)
+        if done:
+            coach_id = done[-1][0].coach_id
+        else:
+            ns = noshow_by_member.get(u.id, [])
+            coach_id = ns[-1][0].coach_id if ns else coach_users[hash(u.username) % 4].id
+
+        end_date = start_date + timedelta(days=weeks * 7 - 1)
+        plan = M.CyclePlan(
+            member_id=u.id, coach_id=coach_id, template_id=tpl.id,
+            name=plan_name, goal=goal, weeks=weeks,
+            start_date=start_date, end_date=end_date,
+            note="周期内按周编排训练单元，完课后自动保存执行快照并复盘动作完成率与训练量。",
+            status=content.PLAN_PUBLISHED, published_at=NOW - timedelta(days=35),
+            created_at=NOW - timedelta(days=36),
+        )
+        db.add(plan)
+        db.flush()
+
+        def make_unit(week_no, day, title, unit_goal, fparts, planned, note=""):
+            return M.PlanUnit(
+                plan_id=plan.id, week_no=week_no, weekday=day.weekday(),
+                scheduled_date=day, title=title, goal=unit_goal,
+                focus_parts=",".join(fparts),
+                planned_exercises_json=json.dumps(planned, ensure_ascii=False),
+                planned_note=note, status=content.UNIT_UNSCHEDULED,
+            )
+
+        # 1) 已完课单元: 从该会员的完课记录中按计划周期选最近的若干节挂载
+        in_range = [row for row in done if start_date <= row[1].start_time.date() <= TODAY]
+        picked_done = in_range[-(weeks * 2 - future_booked_n - future_unsched_n - missed_n):][:weeks * 2]
+        used_dates = set()
+        for idx, (bk, sl, actual_exs, part) in enumerate(picked_done):
+            day = sl.start_time.date()
+            used_dates.add(day)
+            # 部分单元多安排一个当次未执行的动作, 制造动作完成率 <100% 的偏差演示
+            if idx % 3 == 1:
+                planned = planned_with_gap(actual_exs, goal, parts)
+            else:
+                planned = planned_from(actual_exs, goal, parts)
+            wn = max(1, min(weeks, (day - start_date).days // 7 + 1))
+            unit = make_unit(wn, day, f"第{wn}周·{content.PARTS.get(part, '训练')}",
+                             goal, [part], planned,
+                             note=rng.choice(["控制离心节奏", "组间休息90秒", "注意核心收紧", ""]))
+            db.add(unit)
+            db.flush()
+            unit.booking_id = bk.id
+            plansvc.snapshot_completed_unit(unit, bk.session)
+            # 个别单元写教练复盘备注
+            if idx % 2 == 0:
+                unit.coach_note = "完成质量良好，下次可小幅递增负重"
+
+        # 2) 爽约单元: 选周期内该会员的爽约记录挂载
+        ns_pick = [row for row in noshow_by_member.get(u.id, [])
+                   if start_date <= row[1].start_time.date() <= TODAY and row[1].start_time.date() not in used_dates][:1]
+        for bk, sl, ns_goal, ns_parts in ns_pick:
+            day = sl.start_time.date()
+            used_dates.add(day)
+            wn = max(1, min(weeks, (day - start_date).days // 7 + 1))
+            planned = tpl_exercises(tpl)
+            unit = make_unit(wn, day, f"第{wn}周·爽约", ns_goal, ns_parts[:2] or parts[:2], planned)
+            db.add(unit)
+            db.flush()
+            unit.booking_id = bk.id
+            plansvc.mark_unit_no_show(unit, now=sl.start_time)
+
+        # 3) 逾期未安排单元
+        miss_candidates = [start_date + timedelta(days=d)
+                           for d in range((TODAY - start_date).days)
+                           if (start_date + timedelta(days=d)) not in used_dates
+                           and (start_date + timedelta(days=d)).weekday() < 5]
+        for i, day in enumerate(miss_candidates[:missed_n]):
+            used_dates.add(day)
+            wn = max(1, min(weeks, (day - start_date).days // 7 + 1))
+            unit = make_unit(wn, day, f"第{wn}周·补练单元", goal, parts[:2], tpl_exercises(tpl),
+                             note="逾期未约课，请尽快安排")
+            # 一半演示 missed(已确认漏训), 一半保留 unscheduled(仍可补约), 都计入逾期提醒
+            if i % 2 == 0:
+                unit.status = content.UNIT_MISSED
+            db.add(unit)
+
+        # 4) 未来已约单元: 新开可约时段并由会员预约关联
+        future_days_pool = [TODAY + timedelta(days=d) for d in range(1, 14)
+                            if (TODAY + timedelta(days=d)).weekday() < 5]
+        future_idx = 0
+        for _ in range(future_booked_n):
+            while future_idx < len(future_days_pool):
+                day = future_days_pool[future_idx]; future_idx += 1
+                if day in used_dates:
+                    continue
+                # 找一个不冲突的钟点
+                for hour in (10, 15, 19, 11, 16):
+                    st = datetime.combine(day, time(hour, 0))
+                    clash = db.scalar(select(M.Slot).where(
+                        M.Slot.coach_id == coach_id,
+                        M.Slot.start_time < st + timedelta(hours=1),
+                        M.Slot.start_time >= st - timedelta(minutes=30)))
+                    if clash:
+                        continue
+                    slot = M.Slot(coach_id=coach_id, venue_id=venues[0].id,
+                                  start_time=st, end_time=st + timedelta(hours=1),
+                                  status=content.SLOT_BOOKED)
+                    db.add(slot); db.flush()
+                    bk = M.Booking(member_id=u.id, coach_id=coach_id, slot_id=slot.id,
+                                   status=content.BK_BOOKED, goal=goal,
+                                   focus_parts=",".join(parts[:2]),
+                                   limitations=LIMITATIONS_BANK[u.username],
+                                   template_id=tpl.id, created_at=NOW)
+                    db.add(bk); db.flush()
+                    wn = max(1, min(weeks, (day - start_date).days // 7 + 1))
+                    unit = make_unit(wn, day, f"第{wn}周·{content.PARTS.get(parts[0], '训练')}",
+                                     goal, parts[:2], tpl_exercises(tpl))
+                    db.add(unit); db.flush()
+                    unit.booking_id = bk.id
+                    unit.status = content.UNIT_BOOKED
+                    used_dates.add(day)
+                    break
+                if day in used_dates:
+                    break
+
+        # 5) 未来未安排单元（会员约课台可关联）
+        for day in future_days_pool:
+            if day > end_date or day in used_dates:
+                continue
+            used_dates.add(day)
+            wn = max(1, min(weeks, (day - start_date).days // 7 + 1))
+            db.add(make_unit(wn, day, f"第{wn}周·待安排", goal, parts[:2], tpl_exercises(tpl)))
+            future_unsched_n -= 1
+            if future_unsched_n <= 0:
+                break

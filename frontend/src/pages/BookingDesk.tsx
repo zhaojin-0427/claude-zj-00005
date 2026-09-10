@@ -3,7 +3,7 @@ import { api, errText, localNowIso } from '../api'
 import { useAuth } from '../auth'
 import { useToast } from '../toast'
 import { Modal } from '../components/ui'
-import { Booking, ContentBundle, PlanTemplate, Slot } from '../types'
+import { Booking, ContentBundle, PlanTemplate, PlanUnitBrief, Slot } from '../types'
 import { fmtDateTime, STATUS_CLS, STATUS_LABEL, weekdayLabel } from '../utils'
 
 const DAY_MS = 86400000
@@ -19,6 +19,7 @@ export default function BookingDesk() {
   const [coachFilter, setCoachFilter] = useState('')
   const [coaches, setCoaches] = useState<{ id: number; full_name: string }[]>([])
   const [target, setTarget] = useState<Slot | null>(null)
+  const [units, setUnits] = useState<PlanUnitBrief[]>([])
 
   const load = async () => {
     const base = new Date(); base.setHours(0, 0, 0, 0)
@@ -28,13 +29,14 @@ export default function BookingDesk() {
     const params: any = { date_from: localNowIso(d0), date_to: localNowIso(d1) }
     if (coachFilter) params.coach_id = coachFilter
     const q = new URLSearchParams(params).toString()
-    const [s, m, t, c] = await Promise.all([
+    const [s, m, t, c, u] = await Promise.all([
       api.get<Slot[]>(`/slots?${q}`),
       api.get<Booking[]>('/bookings?status=booked&asc=true'),
       api.get<PlanTemplate[]>('/templates'),
       api.get<{ id: number; full_name: string }[]>('/coaches'),
+      api.get<PlanUnitBrief[]>('/plans/units/upcoming'),
     ])
-    setSlots(s.data); setMine(m.data); setTemplates(t.data); setCoaches(c.data)
+    setSlots(s.data); setMine(m.data); setTemplates(t.data); setCoaches(c.data); setUnits(u.data)
   }
 
   useEffect(() => { api.get('/content').then((r) => setContent(r.data)) }, [])
@@ -61,11 +63,39 @@ export default function BookingDesk() {
       {alerts.length > 0 && (
         <div className="mb20">
           {alerts.map((a, i) => (
-            <div key={i} className={`alert ${a.type === 'goal_achieved' ? 'alert-goal' : a.type === 'low_sessions' ? 'alert-warn' : 'alert-info'}`}>
-              <span>{a.type === 'goal_achieved' ? '🎉' : a.type === 'low_sessions' ? '⏳' : '📌'}</span>
+            <div key={i} className={`alert ${a.type === 'goal_achieved' ? 'alert-goal' : a.type === 'low_sessions' ? 'alert-warn' : a.type === 'plan_overdue' ? 'alert-warn' : 'alert-info'}`}>
+              <span>{a.type === 'goal_achieved' ? '🎉' : a.type === 'low_sessions' ? '⏳' : a.type === 'plan_overdue' ? '🔁' : '📌'}</span>
               <div>{a.message}</div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* 周期计划待安排单元提醒 */}
+      {units.length > 0 && (
+        <div className="card mb20" style={{ borderColor: 'rgba(34,211,167,0.4)' }}>
+          <div className="card-title">🔁 周期计划 · 待安排训练单元
+            <span className="sub">约课时关联，计划内容自动带入课前简报与课后登记</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>计划日期</th><th>所属计划 / 单元</th><th>目标 / 部位</th><th>状态</th></tr></thead>
+              <tbody>
+                {units.slice(0, 5).map((u) => {
+                  const overdue = new Date(u.scheduled_date + 'T23:59:59').getTime() < Date.now()
+                  return (
+                    <tr key={u.id}>
+                      <td><b>{u.scheduled_date}</b>{overdue && <span className="tag tag-amber" style={{ marginLeft: 6 }}>逾期</span>}</td>
+                      <td>{u.plan_name} · {u.title || `第${u.week_no}周`}</td>
+                      <td>{u.goal_label} · {u.focus_parts_labels.join('/') || '全身'}</td>
+                      <td><span className="tag tag-gray">{u.status_label}</span></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {units.length > 5 && <div className="faint mt8" style={{ fontSize: 12.5 }}>另有 {units.length - 5} 个待安排单元，可在预约弹窗中选择</div>}
         </div>
       )}
 
@@ -78,14 +108,18 @@ export default function BookingDesk() {
         {mine.length === 0 ? <div className="empty">近期还没有预约，从下方时段表选择一节吧</div> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>时间</th><th>教练</th><th>场地</th><th>目标 / 部位</th><th>状态</th><th></th></tr></thead>
+              <thead><tr><th>时间</th><th>教练</th><th>场地</th><th>目标 / 部位 / 周期单元</th><th>状态</th><th></th></tr></thead>
               <tbody>
                 {mine.map((b) => (
                   <tr key={b.id}>
                     <td>{fmtDateTime(b.slot?.start_time)} · {weekdayLabel(b.slot?.start_time ?? '')}</td>
                     <td>{b.coach?.full_name ?? '—'}</td>
                     <td>{b.slot?.venue?.name} <span className="faint">({b.slot?.venue?.kind_label})</span></td>
-                    <td>{b.goal_label} · {b.focus_parts_labels.join('/') || '全身'}</td>
+                    <td>{b.goal_label} · {b.focus_parts_labels.join('/') || '全身'}
+                      {b.plan_unit && <div className="tag tag-purple mt8" style={{ width: 'fit-content' }}>
+                        🔁 {b.plan_unit.week_no ? `第${b.plan_unit.week_no}周·` : ''}{b.plan_unit.title || '周期单元'}
+                      </div>}
+                    </td>
                     <td><span className={STATUS_CLS[b.status]}>{STATUS_LABEL[b.status]}</span></td>
                     <td className="right">
                       {new Date(b.slot?.start_time ?? 0).getTime() <= Date.now()
@@ -156,6 +190,7 @@ export default function BookingDesk() {
           slot={target}
           content={content}
           templates={templates}
+          units={units}
           defaultLimitations={user?.member_profile?.limitations ?? ''}
           onClose={() => setTarget(null)}
           onDone={() => { setTarget(null); load(); refresh(); toast('预约成功！可在「我的训练档案」查看') }}
@@ -165,10 +200,11 @@ export default function BookingDesk() {
   )
 }
 
-function BookingModal({ slot, content, templates, defaultLimitations, onClose, onDone }: {
+function BookingModal({ slot, content, templates, units, defaultLimitations, onClose, onDone }: {
   slot: Slot
   content: ContentBundle
   templates: PlanTemplate[]
+  units: PlanUnitBrief[]
   defaultLimitations: string
   onClose: () => void
   onDone: () => void
@@ -177,11 +213,14 @@ function BookingModal({ slot, content, templates, defaultLimitations, onClose, o
   const [parts, setParts] = useState<string[]>([])
   const [limitations, setLimitations] = useState(defaultLimitations)
   const [templateId, setTemplateId] = useState<number | null>(null)
+  const [unitId, setUnitId] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const toast = useToast()
 
   const togglePart = (p: string) =>
     setParts((arr) => arr.includes(p) ? arr.filter((x) => x !== p) : [...arr, p])
+
+  const selectedUnit = units.find((u) => u.id === unitId) || null
 
   const applyTemplate = (id: string) => {
     setTemplateId(id ? Number(id) : null)
@@ -193,13 +232,23 @@ function BookingModal({ slot, content, templates, defaultLimitations, onClose, o
     }
   }
 
+  const applyUnit = (id: string) => {
+    const uid = id ? Number(id) : null
+    setUnitId(uid)
+    const u = units.find((x) => x.id === uid)
+    if (u) {
+      if (u.goal) setGoal(u.goal)
+      if (u.focus_parts_list.length) setParts(u.focus_parts_list)
+    }
+  }
+
   const submit = async () => {
     if (!parts.length) { toast('请至少选择一个重点部位', 'err'); return }
     setBusy(true)
     try {
       await api.post('/bookings', {
         slot_id: slot.id, goal, focus_parts: parts,
-        limitations, template_id: templateId,
+        limitations, template_id: templateId, plan_unit_id: unitId,
       })
       onDone()
     } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
@@ -209,13 +258,43 @@ function BookingModal({ slot, content, templates, defaultLimitations, onClose, o
   const selectedTpl = templates.find((t) => t.id === templateId)
   let tplExs: any[] = []
   if (selectedTpl) { try { tplExs = JSON.parse(selectedTpl.exercises_json) } catch { /* ignore */ } }
+  let unitExs: any[] = []
+  if (selectedUnit) { try { unitExs = JSON.parse(selectedUnit.planned_exercises_json) } catch { /* ignore */ } }
 
   return (
     <Modal title={`预约私教课 · ${fmtDateTime(slot.start_time)}`} onClose={onClose} wide>
       <div className="kv"><span>授课教练</span><b>{slot.coach?.full_name ?? '系统安排'}</b></div>
       <div className="kv"><span>训练场地</span><b>{slot.venue?.name}（{slot.venue?.kind_label}）</b></div>
 
-      <label className="fld mt12"><span>一键套用训练计划模板</span>
+      <label className="fld mt12"><span>关联周期计划训练单元（可选，仅显示本人尚未安排的单元）</span>
+        <select value={unitId ?? ''} onChange={(e) => applyUnit(e.target.value)}>
+          <option value="">不关联周期单元（普通约课）</option>
+          {units.map((u) => {
+            const overdue = new Date(u.scheduled_date + 'T23:59:59').getTime() < Date.now()
+            return (
+              <option key={u.id} value={u.id}>
+                {u.scheduled_date}（{overdue ? '逾期·' : ''}{u.plan_name} · {u.title || `第${u.week_no}周`}）
+              </option>
+            )
+          })}
+        </select>
+      </label>
+      {selectedUnit && (
+        <div className="card soft mb16" style={{ padding: 14, borderColor: 'rgba(34,211,167,0.4)' }}>
+          <div className="muted mb8" style={{ fontSize: 12.5 }}>
+            🔁 将关联「{selectedUnit.plan_name}」第{selectedUnit.week_no}周单元
+            {selectedUnit.planned_note ? ` · ${selectedUnit.planned_note}` : ''}
+            ；课后登记将自动带入下列计划动作，完课后保存执行快照
+          </div>
+          {unitExs.map((e: any, i: number) => (
+            <span key={i} className="exercise-pill">{e.name}
+              <b>{e.sets}×{e.reps}</b>{e.weight > 0 && <span className="faint">{e.weight}kg</span>}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <label className="fld"><span>一键套用训练计划模板</span>
         <select value={templateId ?? ''} onChange={(e) => applyTemplate(e.target.value)}>
           <option value="">不使用模板（由教练现场安排）</option>
           {matchedTemplates.map((t) => (

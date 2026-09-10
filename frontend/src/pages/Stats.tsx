@@ -30,7 +30,7 @@ export default function Stats() {
   return (
     <div>
       <div className="flex-between mb20">
-        <div className="muted">服务闭环复盘：课时利用率 · 续约率 · 目标达成周期 · 部位训练频次</div>
+        <div className="muted">服务闭环复盘：周期计划完成率/爽约率/训练量 · 课时利用率 · 续约率 · 目标达成 · 部位频次</div>
         <div className="chk-row">
           {[30, 90, 180].map((d) => (
             <span key={d} className={`chip ${days === d ? 'on' : ''}`} onClick={() => setDays(d)}>近{d}天</span>
@@ -66,6 +66,59 @@ export default function Stats() {
           <div className="label">平均训练强度 RPE</div>
           <div className="value">{data.avg_rpe ?? '-'}<small> /10</small></div>
           <div className="foot">新购 {data.new_packages} 课包 · 续约 {data.renewal_packages} 课包</div>
+        </div>
+      </div>
+
+      {/* 周期计划 KPI */}
+      <div className="grid grid-4 mb20">
+        <div className="card stat">
+          <span className="ico">🔁</span>
+          <div className="label">周期计划完成率</div>
+          <div className="value">{data.plan_completion_rate ?? 0}<small>%</small></div>
+          <div className="foot">已完课 {data.completed_plan_units ?? 0} / 到期单元 {data.due_units ?? 0}（共 {data.cycle_plan_count ?? 0} 份计划）</div>
+          <div className="progress mt8"><div style={{ width: `${data.plan_completion_rate ?? 0}%` }} /></div>
+        </div>
+        <div className="card stat blue">
+          <span className="ico">🚫</span>
+          <div className="label">周期计划爽约率</div>
+          <div className="value">{data.plan_no_show_rate ?? 0}<small>%</small></div>
+          <div className="foot">爽约 {data.no_show_plan_units ?? 0} 单元 · 逾期未排 {data.missed_plan_units ?? 0} 单元</div>
+        </div>
+        <div className="card stat amber">
+          <span className="ico">🏋️</span>
+          <div className="label">实际总训练量</div>
+          <div className="value" style={{ fontSize: 24, paddingTop: 4 }}>
+            {(data.plan_actual_volume ?? 0) >= 10000
+              ? `${((data.plan_actual_volume ?? 0) / 1000).toFixed(1)}t`
+              : `${Math.round(data.plan_actual_volume ?? 0)}`}<small> kg</small>
+          </div>
+          <div className="foot">计划量 {((data.plan_planned_volume ?? 0) / 1000).toFixed(1)}t · 周期单元累计</div>
+        </div>
+        <div className="card stat purple">
+          <span className="ico">📦</span>
+          <div className="label">活跃周期计划</div>
+          <div className="value">{data.cycle_plan_count ?? 0}<small> 份</small></div>
+          <div className="foot">近{days}天到期 {data.due_units ?? 0} 个训练单元</div>
+        </div>
+      </div>
+
+      {/* 周期计划训练量趋势 */}
+      <div className="card mb20">
+        <div className="card-title">📊 周期计划训练量趋势 <span className="sub">按实际上课日 · 计划值 vs 实际值（kg）</span></div>
+        <div style={{ height: 280 }}>
+          <ResponsiveContainer>
+            <LineChart data={data.plan_volume_trend ?? []} margin={{ top: 8, right: 20, left: -6 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="date" interval={Math.max(0, Math.floor((data.plan_volume_trend ?? []).length / 14))} />
+              <YAxis />
+              <Tooltip formatter={(v: any) => `${Math.round(v)} kg`} />
+              <Legend />
+              <Line type="monotone" dataKey="planned_volume" name="计划训练量" stroke="#60a5fa" strokeWidth={2}
+                strokeDasharray="5 4" dot={false} />
+              <Line type="monotone" dataKey="actual_volume" name="实际训练量" stroke="#22d3a7" strokeWidth={2.5}
+                dot={{ r: 2.5 }} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       </div>
 

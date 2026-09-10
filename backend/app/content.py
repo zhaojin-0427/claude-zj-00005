@@ -26,6 +26,30 @@ BK_COMPLETED = "completed"
 BK_NO_SHOW = "no_show"
 BK_CANCELED = "canceled"
 
+# ---- cycle plan status ----
+PLAN_DRAFT = "draft"
+PLAN_PUBLISHED = "published"
+PLAN_ARCHIVED = "archived"
+PLAN_STATUS = {PLAN_DRAFT: "草稿", PLAN_PUBLISHED: "已发布", PLAN_ARCHIVED: "已归档"}
+
+# ---- plan unit status ----
+UNIT_UNSCHEDULED = "unscheduled"  # 未安排（尚未约课）
+UNIT_BOOKED = "booked"            # 已约课待上课
+UNIT_COMPLETED = "completed"      # 已完课（执行快照已冻结）
+UNIT_MISSED = "missed"            # 逾期未安排
+UNIT_NO_SHOW = "no_show"          # 爽约
+UNIT_STATUS = {
+    UNIT_UNSCHEDULED: "未安排",
+    UNIT_BOOKED: "已约课",
+    UNIT_COMPLETED: "已完课",
+    UNIT_MISSED: "逾期未安排",
+    UNIT_NO_SHOW: "爽约",
+}
+# 计入「已执行」(分母: 单元计划完成情况) 的终态
+UNIT_DONE_STATES = {UNIT_COMPLETED, UNIT_NO_SHOW, UNIT_MISSED}
+# 低完成率提醒阈值
+LOW_COMPLETION_THRESHOLD = 60.0
+
 # ---- training goals ----
 GOALS = {
     "fat_loss": "减脂减重",

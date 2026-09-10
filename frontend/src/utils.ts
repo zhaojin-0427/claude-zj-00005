@@ -33,3 +33,49 @@ export const STATUS_LABEL: Record<string, string> = {
 export const STATUS_CLS: Record<string, string> = {
   booked: 'tag tag-blue', completed: 'tag tag-green', no_show: 'tag tag-red', canceled: 'tag tag-gray',
 }
+
+// ---------- 周期训练计划 ----------
+export const UNIT_LABEL: Record<string, string> = {
+  unscheduled: '未安排', booked: '已约课', completed: '已完课',
+  missed: '逾期未安排', no_show: '爽约',
+}
+export const UNIT_CLS: Record<string, string> = {
+  unscheduled: 'tag tag-gray', booked: 'tag tag-blue', completed: 'tag tag-green',
+  missed: 'tag tag-amber', no_show: 'tag tag-red',
+}
+export const PLAN_STATE_LABEL: Record<string, string> = {
+  draft: '草稿', not_started: '未开始', in_progress: '进行中',
+  finished: '已完成', archived: '已归档',
+}
+export const PLAN_STATE_CLS: Record<string, string> = {
+  draft: 'tag tag-gray', not_started: 'tag tag-gray', in_progress: 'tag tag-blue',
+  finished: 'tag tag-green', archived: 'tag tag-gray',
+}
+
+/** 把 '8-10' / '12' 之类的次数描述折算为代表次数（区间取均值）。 */
+export function repsCount(reps: string | number | null | undefined): number {
+  if (typeof reps === 'number') return reps
+  const nums = String(reps ?? '').match(/\d+(\.\d+)?/g)
+  if (!nums || !nums.length) return 0
+  const v = nums.map(Number)
+  return v.reduce((a, b) => a + b, 0) / v.length
+}
+
+/** 单动作训练量(kg) = 组数 × 次数 × 负重。 */
+export function exerciseVolume(e: { sets?: number; reps?: string | number; weight?: number }): number {
+  return Math.round(((e.sets ?? 0) * repsCount(e.reps) * (e.weight ?? 0)) * 10) / 10
+}
+
+/** 总训练量(kg)，自重动作负重 0 不计。 */
+export function totalVolume(exs: any[]): number {
+  return Math.round(exs.reduce((s, e) => s + exerciseVolume(e), 0) * 10) / 10
+}
+
+export function fmtVolume(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-'
+  return v >= 10000 ? `${(v / 1000).toFixed(1)}t` : `${Math.round(v)}kg`
+}
+
+export function parseEx(json: string | null | undefined): any[] {
+  return parseExercises(json || '[]')
+}

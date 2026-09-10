@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { Loading } from '../components/ui'
+import MemberCycleArchive from '../components/MemberCycleArchive'
 import { Booking, ContentBundle } from '../types'
 import { fmtDateTime, parseExercises, STATUS_CLS, STATUS_LABEL, weekdayLabel } from '../utils'
 
@@ -45,7 +46,7 @@ export default function MySessions() {
   const { user } = useAuth()
   const [bookings, setBookings] = useState<Booking[] | null>(null)
   const [content, setContent] = useState<ContentBundle | null>(null)
-  const [tab, setTab] = useState<'all' | 'booked' | 'completed' | 'canceled'>('all')
+  const [tab, setTab] = useState<'all' | 'booked' | 'completed' | 'canceled' | 'cycle'>('all')
   const [openId, setOpenId] = useState<number | null>(null)
 
   useEffect(() => {
@@ -54,7 +55,7 @@ export default function MySessions() {
   }, [])
 
   const filtered = useMemo(() => (bookings ?? []).filter((b) => {
-    if (tab === 'all') return true
+    if (tab === 'all' || tab === 'cycle') return true
     if (tab === 'canceled') return b.status === 'canceled' || b.status === 'no_show'
     return b.status === tab
   }), [bookings, tab])
@@ -81,17 +82,20 @@ export default function MySessions() {
 
       <div className="card">
         <div className="tabs">
-          {[['all', '全部'], ['booked', '待上课'], ['completed', '已完成'], ['canceled', '已取消/爽约']].map(([k, l]) => (
+          {[['all', '全部'], ['booked', '待上课'], ['completed', '已完成'], ['canceled', '已取消/爽约'], ['cycle', '🔁 周期日历']].map(([k, l]) => (
             <div key={k} className={`tab ${tab === k ? 'active' : ''}`}
               onClick={() => setTab(k as any)}>
-              {l} ({k === 'all' ? counts.all : (k === 'canceled'
+              {l}
+              {k === 'cycle' ? '' : ` (${k === 'all' ? counts.all : k === 'canceled'
                 ? (counts.canceled ?? 0) + (counts.no_show ?? 0)
-                : counts[k] ?? 0)})
+                : counts[k] ?? 0})`}
             </div>
           ))}
         </div>
 
-        {filtered.length === 0 ? <div className="empty">暂无训练记录</div> : (
+        {tab === 'cycle' ? (
+          <MemberCycleArchive />
+        ) : filtered.length === 0 ? <div className="empty">暂无训练记录</div> : (
           <div className="timeline">
             {filtered.map((b) => {
               const open = openId === b.id || (openId === null && b.status === 'completed')

@@ -6,13 +6,14 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import (User, Slot, Booking, Package, TrainingSession,
-                      MemberProfile, BodyMeasurement, Goal, PlanTemplate)
+                      MemberProfile, BodyMeasurement, Goal, PlanTemplate,
+                      CyclePlan, PlanUnit)
 from ..deps import get_current_user
 from ..timeutil import client_now
 from ..schemas import BookingCreate, SessionIn
 from ..serializers import booking_dict, session_dict, goal_dict, member_profile_dict, template_dict
 from ..services import evaluate_goals
-from .. import content
+from .. import content, plansvc
 
 router = APIRouter(prefix="/api/bookings", tags=["bookings"])
 
@@ -98,13 +99,40 @@ def create_booking(body: BookingCreate, db: Session = Depends(get_db),
     if not remaining or int(remaining) <= 0:
         raise HTTPException(status_code=400, detail="私教课时不足，请联系前台续约课包")
 
+    # 关联周期计划训练单元: 校验归属/可安排状态, 并用单元计划内容预填约课信息
+    unit = None
+    prefill_goal = body.goal
+    prefill_parts = body.focus_parts
+    if body.plan_unit_id:
+        unit = db.get(PlanUnit, body.plan_unit_id)
+        if not unit:
+            raise HTTPException(status_code=404, detail="训练单元不存在")
+        plan = db.get(CyclePlan, unit.plan_id)
+        if not plan or plan.member_id != user.id or plan.status != content.PLAN_PUBLISHED:
+            raise HTTPException(status_code=403, detail="训练单元不可用")
+        if unit.booking_id is not None or unit.status not in (
+                content.UNIT_UNSCHEDULED, content.UNIT_MISSED):
+            raise HTTPException(status_code=400, detail="该训练单元已安排或已完课，无法重复关联")
+        if slot.coach_id != plan.coach_id:
+            coach_name = db.get(User, plan.coach_id).full_name
+            raise HTTPException(status_code=400,
+                                detail=f"该单元属于 {coach_name} 教练的周期计划，请选择该教练的时段")
+        if not body.goal:
+            prefill_goal = unit.goal or plan.goal
+        if not prefill_parts:
+            prefill_parts = [p for p in (unit.focus_parts or "").split(",") if p]
+
     slot.status = content.SLOT_BOOKED
     b = Booking(
         member_id=user.id, coach_id=slot.coach_id, slot_id=slot.id,
-        goal=body.goal, focus_parts=",".join(body.focus_parts),
+        goal=prefill_goal, focus_parts=",".join(prefill_parts),
         limitations=body.limitations, template_id=body.template_id,
     )
     db.add(b)
+    db.flush()
+    if unit:
+        unit.booking_id = b.id
+        unit.status = content.UNIT_BOOKED
     # 预约即占用 1 课时（待上课计入占用），取消时返还
     _consume_session(user.id, db)
     db.commit()
@@ -146,6 +174,8 @@ def cancel_booking(booking_id: int, db: Session = Depends(get_db),
     b.status = content.BK_CANCELED
     b.canceled_at = now
     b.slot.status = content.SLOT_OPEN
+    if b.plan_unit:
+        plansvc.release_unit(b.plan_unit, now=now)
     _refund_session(b.member_id, db)  # 取消返还预约时占用的课时
     db.commit()
     return {"ok": True}
@@ -201,9 +231,26 @@ def pre_class_brief(booking_id: int, db: Session = Depends(get_db),
         if tpl:
             template = template_dict(tpl)
 
+    # 周期计划单元: 计划动作/目标/备注（快照随计划本身, 完课后前端只读展示）
+    plan_unit = None
+    plan_info = None
+    if b.plan_unit:
+        from ..serializers import plan_unit_dict
+        pu = b.plan_unit
+        plan_unit = plan_unit_dict(pu)
+        pl = db.get(CyclePlan, pu.plan_id)
+        if pl:
+            plan_info = {
+                "id": pl.id, "name": pl.name, "weeks": pl.weeks,
+                "week_no": pu.week_no, "scheduled_date": pu.scheduled_date,
+                "unit_title": pu.title or f"第{pu.week_no}周训练",
+            }
+
     return {
         "booking": booking_dict(b, member=member, coach=db.get(User, b.coach_id)),
         "template": template,
+        "plan_unit": plan_unit,
+        "plan_info": plan_info,
         "profile": member_profile_dict(member.member_profile) if member and member.member_profile else None,
         "measurements": [
             {"measured_at": m.measured_at, "weight": m.weight, "body_fat_pct": m.body_fat_pct,
@@ -281,9 +328,16 @@ def register_session(booking_id: int, body: SessionIn, db: Session = Depends(get
 
     db.commit()
     db.refresh(b)
+    # 关联周期计划单元: 冻结不受计划/模板后续修改影响的执行快照, 计算完成率与训练量
+    comparison = None
+    if b.plan_unit:
+        # 首次完课后单元状态即 completed, planned 内容已锁定, 重算仅更新实际值
+        comparison = plansvc.snapshot_completed_unit(b.plan_unit, sess)
+        db.commit()
     # 登记完后自动评估目标达成
     reminders = evaluate_goals(b.member_id, db)
-    return {"session": session_dict(sess), "reminders": reminders}
+    return {"session": session_dict(sess), "reminders": reminders,
+            "plan_comparison": comparison}
 
 
 @router.post("/{booking_id}/no-show")
@@ -304,5 +358,7 @@ def mark_no_show(booking_id: int, db: Session = Depends(get_db),
     b.status = content.BK_NO_SHOW
     b.slot.status = content.SLOT_NO_SHOW
     # 爽约按课耗: 预约时占用的课时不返还
+    if b.plan_unit:
+        plansvc.mark_unit_no_show(b.plan_unit, now=now)
     db.commit()
     return {"ok": True}

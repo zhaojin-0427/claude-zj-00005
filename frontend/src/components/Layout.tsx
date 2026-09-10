@@ -11,6 +11,7 @@ const NAV: { group: string; items: NavDef[] }[] = [
     items: [
       { to: '/booking', label: '会员约课台', icon: '📅', roles: ['member'] },
       { to: '/my-sessions', label: '我的训练档案', icon: '📒', roles: ['member'] },
+      { to: '/my-plans', label: '我的周期计划', icon: '🔁', roles: ['member'] },
       { to: '/my-body', label: '我的体测追踪', icon: '📈', roles: ['member'] },
     ],
   },
@@ -18,6 +19,7 @@ const NAV: { group: string; items: NavDef[] }[] = [
     group: '教练工作台',
     items: [
       { to: '/coach', label: '教练工作台', icon: '🏋️', roles: ['coach', 'admin'] },
+      { to: '/plans', label: '周期训练计划', icon: '🔁', roles: ['coach', 'admin'] },
       { to: '/members', label: '会员健康档案', icon: '🗂️', roles: ['coach', 'admin'] },
     ],
   },
@@ -41,13 +43,18 @@ export default function Layout({ children }: { children: ReactNode }) {
   const titleMap: Record<string, string> = {
     '/booking': '会员约课台',
     '/my-sessions': '我的训练档案',
+    '/my-plans': '我的周期训练计划',
     '/my-body': '体测追踪 · 目标管理',
     '/coach': '教练工作台',
+    '/plans': '周期训练计划',
+    '/plans/new': '编排周期训练计划',
     '/members': '会员健康档案',
     '/stats': '数据统计复盘',
     '/ops': '场地 · 私教时段 · 训练模板维护',
   }
-  const title = titleMap[loc.pathname] ?? 'FitTrack'
+  const title = loc.pathname.startsWith('/plans/') ? '周期计划 · 执行复盘'
+    : loc.pathname.startsWith('/my-plans/') ? '周期计划 · 执行复盘'
+    : titleMap[loc.pathname] ?? 'FitTrack'
 
   return (
     <div className="app-shell">

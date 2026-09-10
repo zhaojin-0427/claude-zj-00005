@@ -4,7 +4,7 @@ import { useAuth } from '../auth'
 import { useToast } from '../toast'
 import { Modal, Loading } from '../components/ui'
 import { Brief, ContentBundle, ExerciseItem, Goal, PlanTemplate, TrainingSession, Workbench } from '../types'
-import { fmtDateTime, parseExercises, STATUS_CLS, weekdayLabel } from '../utils'
+import { fmtDateTime, parseExercises, STATUS_CLS, weekdayLabel, totalVolume, fmtVolume } from '../utils'
 
 export default function CoachDesk() {
   const { user } = useAuth()
@@ -36,9 +36,56 @@ export default function CoachDesk() {
 
   if (!data) return <Loading />
   const list = tab === 'today' ? data.today : data.upcoming
+  const overdue = data.plan_alerts?.overdue_units ?? []
+  const lowRate = data.plan_alerts?.low_completion_plans ?? []
 
   return (
     <div>
+      {(overdue.length > 0 || lowRate.length > 0) && (
+        <div className="grid mb20" style={{ gridTemplateColumns: '1fr 1fr' }}>
+          <div className="card" style={{ borderColor: 'rgba(245,158,11,0.4)' }}>
+            <div className="card-title">⚠️ 周期单元逾期提醒 <span className="sub">{overdue.length} 个未安排单元已过计划日期</span></div>
+            {overdue.length === 0 ? <div className="empty" style={{ padding: '14px' }}>暂无逾期单元</div> : (
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>会员</th><th>周期计划 / 单元</th><th>计划日期</th><th>逾期</th></tr></thead>
+                  <tbody>
+                    {overdue.slice(0, 6).map((o) => (
+                      <tr key={o.unit_id}>
+                        <td><b>{o.member_name}</b></td>
+                        <td style={{ fontSize: 12.5 }}>{o.plan_name}<div className="faint">{o.unit_title}</div></td>
+                        <td>{o.scheduled_date}</td>
+                        <td><span className="tag tag-amber">{o.days_overdue} 天</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div className="card" style={{ borderColor: 'rgba(248,113,113,0.4)' }}>
+            <div className="card-title">📉 低完成率计划提醒 <span className="sub">单元执行率低于 60%</span></div>
+            {lowRate.length === 0 ? <div className="empty" style={{ padding: '14px' }}>暂无低完成率计划</div> : (
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>会员</th><th>周期计划</th><th>完成</th><th>执行率</th></tr></thead>
+                  <tbody>
+                    {lowRate.slice(0, 6).map((o) => (
+                      <tr key={o.plan_id}>
+                        <td><b>{o.member_name}</b></td>
+                        <td style={{ fontSize: 12.5 }}>{o.plan_name}<div className="faint">{o.weeks} 周周期</div></td>
+                        <td>{o.completed_units}/{o.total_units} 单元</td>
+                        <td><span className="tag tag-red">{o.completion_rate}%</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-4 mb20">
         <div className="card stat"><span className="ico">📅</span><div className="label">今日课程</div>
           <div className="value">{data.today_count}<small> 节</small></div>
@@ -76,7 +123,11 @@ export default function CoachDesk() {
                         <div><b>{b.member?.full_name}</b><div className="faint" style={{ fontSize: 12 }}>📞 {b.member?.phone || '未填'}</div></div>
                       </div>
                     </td>
-                    <td>{b.goal_label}<div className="faint">{b.focus_parts_labels.join(' / ') || '全身'}</div></td>
+                    <td>{b.goal_label}<div className="faint">{b.focus_parts_labels.join(' / ') || '全身'}</div>
+                      {b.plan_unit && <div className="tag tag-purple mt8" style={{ width: 'fit-content' }}>
+                        🔁 {b.plan_unit.week_no ? `第${b.plan_unit.week_no}周·` : ''}{b.plan_unit.title || '周期单元'}
+                      </div>}
+                    </td>
                     <td style={{ maxWidth: 220 }}>
                       <span className="tag tag-amber">{b.limitations || b.member?.profile?.limitations || '无限制'}</span>
                     </td>
@@ -127,7 +178,7 @@ function BriefModal({ brief, onClose, onRegister }: {
   onClose: () => void
   onRegister: () => void
 }) {
-  const { booking: b, profile, measurement_diff: diff, history, goals, leftover_question } = brief
+  const { booking: b, profile, measurement_diff: diff, history, goals, leftover_question, plan_unit, plan_info } = brief
   return (
     <Modal title={`课前简报 · ${b.member?.full_name}`} onClose={onClose} wide>
       <div className="grid grid-2">
@@ -157,6 +208,36 @@ function BriefModal({ brief, onClose, onRegister }: {
           )}
         </div>
       </div>
+
+      {plan_unit && (
+        <div className="card soft mt16" style={{ borderColor: 'rgba(34,211,167,0.4)' }}>
+          <div className="card-title">🔁 周期计划单元 · 本次应执行内容
+            <span className="tag tag-purple">{plan_info?.name} · 第{plan_info?.week_no}周</span>
+          </div>
+          <div className="flex gap6 flex-wrap mb12">
+            <span className="tag tag-green">{plan_unit.goal_label}</span>
+            {plan_unit.focus_parts_labels.map((p) => <span key={p} className="tag tag-blue">{p}</span>)}
+            <span className="tag tag-gray">计划日期 {plan_unit.scheduled_date}</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>计划动作</th><th>组×次</th><th>计划负重</th><th>备注</th></tr></thead>
+              <tbody>
+                {parseExercises(plan_unit.planned_exercises_json).map((e: any, i: number) => (
+                  <tr key={i}>
+                    <td><b>{e.name}</b></td>
+                    <td>{e.sets} × {e.reps}</td>
+                    <td>{e.weight > 0 ? `${e.weight} kg` : '自重'}</td>
+                    <td className="faint">{e.note || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {plan_unit.planned_note && <div className="muted mt8" style={{ fontSize: 12.5 }}>📝 {plan_unit.planned_note}</div>}
+          <div className="muted mt8" style={{ fontSize: 12 }}>完课后将自动保存执行快照（不受计划/模板后续修改影响），并计算动作完成率与训练量偏差。</div>
+        </div>
+      )}
 
       <div className="card soft mt16">
         <div className="card-title">📈 阶段体测变化（首测 → 最近）</div>
@@ -251,16 +332,22 @@ function SessionRegisterModal({ brief, onClose, onDone }: {
   useEffect(() => {
     api.get('/content').then((r) => {
       setContent(r.data)
-      // 优先真正套用约课时选择的训练计划模板(完整动作/组次/负重)
+      // 优先带入周期计划单元的计划动作(组次/负重/备注), 其次约课模板, 最后按部位从动作库预填
       let applied = false
-      if (brief.template) {
+      if (brief.plan_unit) {
+        try {
+          const planExs = JSON.parse(brief.plan_unit.planned_exercises_json) as ExerciseItem[]
+          if (planExs.length) { setExs(planExs.map((e) => ({ ...e }))); applied = true }
+        } catch { /* 解析失败则退回模板 */ }
+      }
+      if (!applied && brief.template) {
         try {
           const tplExs = JSON.parse(brief.template.exercises_json) as ExerciseItem[]
           if (tplExs.length) { setExs(tplExs); applied = true }
         } catch { /* 模板解析失败则退回动作库 */ }
       }
       if (applied) return
-      // 无模板: 按本次重点部位从动作库预填前3个
+      // 无计划/模板: 按本次重点部位从动作库预填前3个
       const prefill: ExerciseItem[] = []
       const part = brief.booking.focus_parts_list[0]
       if (part && r.data.exercise_library[part]) {
@@ -277,6 +364,15 @@ function SessionRegisterModal({ brief, onClose, onDone }: {
     setExs((a) => a.map((e, j) => j === i ? { ...e, [k]: v } : e))
   const remove = (i: number) => setExs((a) => a.filter((_, j) => j !== i))
 
+  // 周期单元: 实时估算动作完成率与训练量偏差
+  const plannedExs: ExerciseItem[] = brief.plan_unit ? parseExercises(brief.plan_unit.planned_exercises_json) : []
+  const norm = (n: string) => (n || '').replace(/[\s（）()/\-—·:：]/g, '').toLowerCase()
+  const liveMatched = plannedExs.length
+    ? plannedExs.filter((p) => exs.some((e) => norm(e.name) === norm(p.name))).length : 0
+  const liveRate = plannedExs.length ? Math.round(100 * liveMatched / plannedExs.length) : null
+  const plannedVol = totalVolume(plannedExs)
+  const actualVol = totalVolume(exs)
+
   const submit = async () => {
     if (!exs.length) { toast('至少登记一个训练动作', 'err'); return }
     if (exs.some((e) => !e.name)) { toast('动作名称不能为空', 'err'); return }
@@ -286,7 +382,12 @@ function SessionRegisterModal({ brief, onClose, onDone }: {
         duration_min: duration, warmup, rpe, summary, leftover,
         next_focus: nextFocus, exercises: exs,
       })
-      toast('训练记录已保存，课时已扣减并完结课程')
+      if (data.plan_comparison) {
+        const pc = data.plan_comparison
+        toast(`已保存执行快照：动作完成率 ${pc.completion_rate}%，实际训练量 ${fmtVolume(pc.actual_volume)} / 计划 ${fmtVolume(pc.planned_volume)}`)
+      } else {
+        toast('训练记录已保存，课时已扣减并完结课程')
+      }
       onDone(data.reminders ?? [])
     } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
   }
@@ -305,6 +406,21 @@ function SessionRegisterModal({ brief, onClose, onDone }: {
       </div>
       <label className="fld"><span>热身安排</span>
         <input value={warmup} onChange={(e) => setWarmup(e.target.value)} placeholder="如：跑步机5分钟+动态拉伸" /></label>
+
+      {brief.plan_unit && (
+        <div className="alert alert-info mb12">
+          <span>🔁</span>
+          <div>
+            关联周期计划「{brief.plan_info?.name}」第{brief.plan_info?.week_no}周单元，下方已带入计划动作；
+            完课后将冻结执行快照。
+            <div className="flex gap6 mt8 flex-wrap">
+              <span className="tag tag-green">预计动作完成率 {liveRate}%（{liveMatched}/{plannedExs.length}）</span>
+              <span className="tag tag-blue">实际训练量 {fmtVolume(actualVol)}</span>
+              <span className="tag tag-gray">计划训练量 {fmtVolume(plannedVol)}</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card-title mt12">动作清单与负重数据
         <button className="btn btn-ghost btn-sm" onClick={addExercise}>+ 添加动作</button>

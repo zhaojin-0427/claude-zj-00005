@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api, errText } from '../api'
 import { useAuth } from '../auth'
 import { useToast } from '../toast'
 import { Loading, Modal } from '../components/ui'
 import BodyTracking from '../components/BodyTracking'
-import { Booking, ContentBundle, MemberDetail } from '../types'
+import { Booking, ContentBundle, CyclePlan, MemberDetail } from '../types'
 import { SessionDetail } from './MySessions'
-import { fmtDate, fmtDateTime, STATUS_CLS, STATUS_LABEL } from '../utils'
+import { fmtDate, fmtDateTime, STATUS_CLS, STATUS_LABEL, fmtVolume, PLAN_STATE_CLS, PLAN_STATE_LABEL } from '../utils'
 
 export default function MemberArchive() {
   const { id } = useParams()
@@ -18,16 +18,18 @@ export default function MemberArchive() {
   const [member, setMember] = useState<MemberDetail | null>(null)
   const [bookings, setBookings] = useState<Booking[] | null>(null)
   const [content, setContent] = useState<ContentBundle | null>(null)
-  const [tab, setTab] = useState<'profile' | 'sessions' | 'body'>('profile')
+  const [tab, setTab] = useState<'profile' | 'sessions' | 'body' | 'plans'>('profile')
   const [grant, setGrant] = useState(false)
+  const [plans, setPlans] = useState<CyclePlan[]>([])
 
   const load = async () => {
-    const [m, b, c] = await Promise.all([
+    const [m, b, c, pl] = await Promise.all([
       api.get<MemberDetail>(`/members/${memberId}`),
       api.get<Booking[]>(`/bookings?member_id=${memberId}`),
       api.get<ContentBundle>('/content'),
+      api.get<CyclePlan[]>(`/plans?member_id=${memberId}`),
     ])
-    setMember(m.data); setBookings(b.data); setContent(c.data)
+    setMember(m.data); setBookings(b.data); setContent(c.data); setPlans(pl.data)
   }
   useEffect(() => { load() }, [memberId])
 
@@ -68,6 +70,9 @@ export default function MemberArchive() {
         <div className={`tab ${tab === 'sessions' ? 'active' : ''}`} onClick={() => setTab('sessions')}>
           📒 训练记录 ({completed.length})
         </div>
+        <div className={`tab ${tab === 'plans' ? 'active' : ''}`} onClick={() => setTab('plans')}>
+          🔁 周期计划 ({plans.length})
+        </div>
         <div className={`tab ${tab === 'body' ? 'active' : ''}`} onClick={() => setTab('body')}>📈 体测与目标</div>
       </div>
 
@@ -93,6 +98,36 @@ export default function MemberArchive() {
         </div>
       )}
       {tab === 'body' && <BodyTracking memberId={memberId} canEdit />}
+      {tab === 'plans' && (
+        <div className="card">
+          <div className="flex-between mb16">
+            <div className="muted">为该会员编排 4~12 周周期计划，完课后自动保存执行快照与完成率/训练量复盘</div>
+            {user?.role === 'coach' && (
+              <Link className="btn btn-primary btn-sm" to={`/plans/new?member_id=${memberId}`}>+ 新建周期计划</Link>
+            )}
+          </div>
+          {plans.length === 0 ? <div className="empty">该会员暂无周期计划</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>计划</th><th>周期</th><th>状态</th><th>执行率</th><th>动作完成率</th><th>实际/计划训练量</th><th></th></tr></thead>
+                <tbody>
+                  {plans.map((p) => (
+                    <tr key={p.id}>
+                      <td><b>{p.name}</b><div className="faint" style={{ fontSize: 12 }}>{p.goal_label}</div></td>
+                      <td style={{ fontSize: 12.5 }}>{fmtDate(p.start_date)}<br />~ {fmtDate(p.end_date)}</td>
+                      <td><span className={PLAN_STATE_CLS[p.summary.state]}>{PLAN_STATE_LABEL[p.summary.state]}</span></td>
+                      <td>{p.summary.completion_rate}%<div className="faint" style={{ fontSize: 12 }}>{p.summary.completed_units}/{p.summary.total_units} 单元</div></td>
+                      <td>{p.summary.avg_exercise_completion ?? '-'}%</td>
+                      <td style={{ fontSize: 12.5 }}>{fmtVolume(p.summary.actual_volume)}<br /><span className="faint">/ {fmtVolume(p.summary.planned_volume)}</span></td>
+                      <td className="right"><Link className="btn btn-ghost btn-sm" to={`/plans/${p.id}`}>查看复盘</Link></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {grant && <GrantModal memberId={memberId} onClose={() => setGrant(false)}
         onDone={async (payload) => {

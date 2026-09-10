@@ -3,7 +3,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from sqlalchemy import select, func
 from . import models as M
-from . import content
+from . import content, plansvc
 
 
 # ---------------------------------------------------------------- goals
@@ -70,6 +70,9 @@ def member_alerts(member_id: int, db) -> list[dict]:
             "type": "next_focus",
             "message": f"上次课教练布置的下次重点：{last_session.next_focus}",
         })
+    overdue = plansvc.member_overdue_alert(member_id, db)
+    if overdue:
+        alerts.append(overdue)
     return alerts
 
 
@@ -213,6 +216,7 @@ def dashboard_stats(db, days: int | None = 90, now: datetime | None = None) -> d
         "part_frequency": part_frequency,
         "avg_rpe": avg_rpe,
         "rpe_trend": rpe_trend,
+        **plansvc.plan_dashboard_stats(db, days=days, now=now),
     }
 
 
@@ -256,4 +260,5 @@ def coach_workbench(coach_id: int, db, now: datetime | None = None) -> dict:
         "month_completed": month_done,
         "today_count": len(today_bookings),
         "week_count": len(upcoming),
+        "plan_alerts": plansvc.coach_plan_alerts(coach_id, db, now=now),
     }
