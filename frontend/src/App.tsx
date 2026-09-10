@@ -10,6 +10,7 @@ import CoachDesk from './pages/CoachDesk'
 import Members from './pages/Members'
 import MemberArchive from './pages/MemberArchive'
 import Stats from './pages/Stats'
+import Ops from './pages/Ops'
 
 function Protected({ roles, children }: { roles?: string[]; children: JSX.Element }) {
   const { user, loading } = useAuth()
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/members" element={<Protected roles={['coach', 'admin']}><Members /></Protected>} />
         <Route path="/members/:id" element={<Protected roles={['coach', 'admin']}><MemberArchive /></Protected>} />
         <Route path="/stats" element={<Protected roles={['coach', 'admin']}><Stats /></Protected>} />
+        <Route path="/ops" element={<Protected roles={['coach', 'admin']}><Ops /></Protected>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </ToastProvider>

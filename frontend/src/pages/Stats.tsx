@@ -44,7 +44,8 @@ export default function Stats() {
           <span className="ico">🏋️</span>
           <div className="label">私教课时利用率</div>
           <div className="value">{data.utilization_rate}<small>%</small></div>
-          <div className="foot">已完成 {data.utilized_slots} / 已排时段 {data.total_scheduled_slots}</div>
+          <div className="foot">已完成 {data.utilized_slots} / 有效排课 {data.total_scheduled_slots}
+            （爽约 {data.no_show_slots ?? 0} 节不计入利用）</div>
           <div className="progress mt8"><div style={{ width: `${data.utilization_rate}%` }} /></div>
         </div>
         <div className="card stat blue">

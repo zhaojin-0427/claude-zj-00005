@@ -1,6 +1,7 @@
 """Deterministic demo data: members, coaches, venues, ~10 weeks of history."""
 import json
 import random
+from collections import defaultdict
 from datetime import datetime, timedelta, date, time
 from sqlalchemy import select, func
 from .database import Base, engine
@@ -10,8 +11,9 @@ from . import content
 
 rng = random.Random(20260910)
 
-TODAY = date(2026, 9, 10)
-NOW = datetime.combine(TODAY, time(10, 0))
+# 以服务器当前墙钟时间为锚点, 保证"今日/明日"演示数据与真实时间对齐
+NOW = datetime.now().replace(minute=0, second=0, microsecond=0)
+TODAY = NOW.date()
 
 MEMBER_PLANS = [
     # username, name, gender, goal, parts, weight curve(start, end), fat curve
@@ -96,19 +98,10 @@ def seed_if_empty(db):
         db.add(profile)
         db.flush()
         db.refresh(u)
-        # 课包: 首单 + 部分会员续约
-        db.add(M.Package(member_id=u.id, total_sessions=12, remaining=0,
-                         price=3600, purchased_at=NOW - timedelta(days=78)))
-        renewed_remaining = {0: 6, 1: 9, 2: 11, 4: 4, 6: 2}
-        if idx in renewed_remaining:
+        # 课包在全部预约生成后按实际占用创建(见文件末尾), 保证 剩余=课包-已占用
+        renewed_members = {0, 1, 2, 4, 6}
+        if idx in renewed_members:
             profile.renewal_count = 1
-            db.add(M.Package(member_id=u.id, total_sessions=24,
-                             remaining=renewed_remaining[idx],
-                             price=6480, purchased_at=NOW - timedelta(days=20 - idx)))
-        else:
-            # 未续约会员补一点剩余课时用于约课
-            db.add(M.Package(member_id=u.id, total_sessions=10, remaining=5,
-                             price=3000, purchased_at=NOW - timedelta(days=40)))
         member_users.append((u, goal, parts, w_curve, f_curve))
     db.flush()
 
@@ -204,6 +197,9 @@ def seed_if_empty(db):
     for t in templates:
         tmpl_by_goal.setdefault(t.goal, t)
 
+    # 每位会员被占用的课时(已完成+爽约+待上课); 取消不占用
+    occupied: dict[int, int] = defaultdict(int)
+
     def make_slot(coach, day, hour, venue):
         start = datetime.combine(day, time(hour, 0))
         return M.Slot(coach_id=coach.id, venue_id=venue.id, start_time=start,
@@ -227,6 +223,7 @@ def seed_if_empty(db):
             roll = rng.random()
             if roll < 0.72:  # 完成
                 u, goal, parts, _, _ = member_users[rng.randrange(len(member_users))]
+                occupied[u.id] += 1
                 slot.status = content.SLOT_COMPLETED
                 b = M.Booking(member_id=u.id, coach_id=coach.id, slot_id=slot.id,
                               status=content.BK_COMPLETED, goal=goal,
@@ -261,9 +258,10 @@ def seed_if_empty(db):
                     created_at=slot.start_time,
                 ))
                 session_seq += 1
-            elif roll < 0.82:  # 爽约
+            elif roll < 0.82:  # 爽约(计入排课与课耗, 但不计入课时利用)
                 u, goal, parts, _, _ = member_users[rng.randrange(len(member_users))]
-                slot.status = content.SLOT_COMPLETED
+                occupied[u.id] += 1
+                slot.status = content.SLOT_NO_SHOW
                 db.add(M.Booking(member_id=u.id, coach_id=coach.id, slot_id=slot.id,
                                  status=content.BK_NO_SHOW, goal=goal,
                                  focus_parts=",".join(parts[:2]),
@@ -297,6 +295,7 @@ def seed_if_empty(db):
             db.flush()
             if rng.random() < 0.45:
                 u, goal, parts, _, _ = member_users[rng.randrange(len(member_users))]
+                occupied[u.id] += 1
                 slot.status = content.SLOT_BOOKED
                 b = M.Booking(member_id=u.id, coach_id=coach.id, slot_id=slot.id,
                               status=content.BK_BOOKED, goal=goal,
@@ -307,13 +306,14 @@ def seed_if_empty(db):
                 db.add(b)
                 future_bookings.append(b)
 
-    # 给每个会员安排一节"今天"的待上课, 方便演示工作台/课前简报
-    today_booked_slot_ids = set()
+    # 给前6个会员各安排一节"今天"的课(固定演示钟点),
+    # 开课后的时段可演示课后登记/爽约, 未来时段可演示约课/取消/课前简报
+    demo_hours = [9, 10, 11, 14, 16, 19]
     for i, ((u, goal, parts, _, _)) in enumerate(member_users[:6]):
+        occupied[u.id] += 1
         coach = coach_users[i % 4]
         venue = venues[i % 3]
-        hour = [9, 10, 11, 14, 16, 19][i]
-        start = datetime.combine(TODAY, time(hour, 0))
+        start = datetime.combine(TODAY, time(demo_hours[i], 0))
         slot = M.Slot(coach_id=coach.id, venue_id=venue.id, start_time=start,
                       end_time=start + timedelta(hours=1), status=content.SLOT_BOOKED)
         db.add(slot)
@@ -323,6 +323,25 @@ def seed_if_empty(db):
                          focus_parts=",".join(parts[:2]),
                          limitations=LIMITATIONS_BANK[u.username],
                          template_id=tmpl_by_goal.get(goal).id if tmpl_by_goal.get(goal) else None,
-                         created_at=NOW - timedelta(hours=2)))
+                         created_at=min(NOW - timedelta(hours=2), start - timedelta(hours=2))))
+
+    # ---- 课包: 按实际占用(已完成+爽约+待上课)生成, 恒等: 课包总量-占用=剩余 ----
+    for (u, _goal, _parts, _, _) in member_users:
+        used = occupied.get(u.id, 0)
+        buffer = rng.randint(2, 7)  # 占用之外的可用余量
+        if u.member_profile.renewal_count > 0:
+            # 二次购课: 24节续约包, 其中 (24-buffer) 节已在历史中消耗
+            renew_consumed = 24 - buffer
+            first_total = max(0, used - renew_consumed)  # 首包全部消耗完
+            if first_total > 0:
+                db.add(M.Package(member_id=u.id, total_sessions=first_total, remaining=0,
+                                 price=300 * first_total, purchased_at=NOW - timedelta(days=78)))
+            db.add(M.Package(member_id=u.id, total_sessions=24, remaining=buffer,
+                             price=6480, purchased_at=NOW - timedelta(days=rng.randint(10, 35))))
+        else:
+            # 仅首包: 总量=占用+余量, 剩余=buffer
+            total_first = used + buffer
+            db.add(M.Package(member_id=u.id, total_sessions=total_first, remaining=buffer,
+                             price=300 * total_first, purchased_at=NOW - timedelta(days=78)))
 
     db.commit()

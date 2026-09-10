@@ -3,7 +3,7 @@ import { api, errText } from '../api'
 import { useAuth } from '../auth'
 import { useToast } from '../toast'
 import { Modal, Loading } from '../components/ui'
-import { Brief, ContentBundle, ExerciseItem, Goal, TrainingSession, Workbench } from '../types'
+import { Brief, ContentBundle, ExerciseItem, Goal, PlanTemplate, TrainingSession, Workbench } from '../types'
 import { fmtDateTime, parseExercises, STATUS_CLS, weekdayLabel } from '../utils'
 
 export default function CoachDesk() {
@@ -65,7 +65,9 @@ export default function CoachDesk() {
             <table>
               <thead><tr><th>时间</th><th>会员</th><th>目标 / 部位</th><th>体能限制</th><th>场地</th><th>操作</th></tr></thead>
               <tbody>
-                {list.map((b) => (
+                {list.map((b) => {
+                  const started = new Date(b.slot?.start_time ?? 0).getTime() <= Date.now()
+                  return (
                   <tr key={b.id}>
                     <td><b>{fmtDateTime(b.slot?.start_time)}</b><div className="faint">{weekdayLabel(b.slot?.start_time ?? '')}</div></td>
                     <td>
@@ -76,20 +78,25 @@ export default function CoachDesk() {
                     </td>
                     <td>{b.goal_label}<div className="faint">{b.focus_parts_labels.join(' / ') || '全身'}</div></td>
                     <td style={{ maxWidth: 220 }}>
-                      <span className="tag tag-amber">{b.member?.profile?.limitations || '无限制'}</span>
+                      <span className="tag tag-amber">{b.limitations || b.member?.profile?.limitations || '无限制'}</span>
                     </td>
                     <td>{b.slot?.venue?.name}</td>
                     <td>
                       <div className="flex gap6" style={{ justifyContent: 'flex-end' }}>
                         <button className="btn btn-ghost btn-sm" onClick={() => openBrief(b.id)}>📋 课前简报</button>
-                        <button className="btn btn-primary btn-sm" onClick={async () => { await openBrief(b.id); setSessionTarget(null) }}>
-                          登记训练
+                        <button className={started ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm'}
+                          disabled={!started} title={started ? '' : '开课后才能登记训练记录'}
+                          onClick={async () => { await openBrief(b.id); setSessionTarget(null) }}>
+                          {started ? '登记训练' : '未开课'}
                         </button>
-                        <button className="btn btn-danger btn-sm" disabled={busyId === b.id} onClick={() => noShow(b.id)}>爽约</button>
+                        <button className="btn btn-danger btn-sm" disabled={busyId === b.id || !started}
+                          title={started ? '' : '开课后才能标记爽约'}
+                          onClick={() => noShow(b.id)}>爽约</button>
                       </div>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -137,8 +144,16 @@ function BriefModal({ brief, onClose, onRegister }: {
           <div className="kv"><span>时间</span><b>{fmtDateTime(b.slot?.start_time)}</b></div>
           <div className="kv"><span>目标</span><b>{b.goal_label}</b></div>
           <div className="kv"><span>部位</span><b>{b.focus_parts_labels.join(' / ')}</b></div>
+          <div className="kv"><span>套用模板</span><b>{brief.template?.name ?? '现场安排'}</b></div>
+          <div className="alert alert-warn mt12">
+            <span>🩹</span>
+            <div>
+              <b>本次预约临时伤病限制（以会员约课时填写为准）：</b><br />
+              {b.limitations || '会员本次未填写临时限制'}
+            </div>
+          </div>
           {leftover_question && (
-            <div className="alert alert-warn mt12">📝 上次遗留 / 下次重点：{leftover_question}</div>
+            <div className="alert alert-info mt12">📝 上次遗留 / 下次重点：{leftover_question}</div>
           )}
         </div>
       </div>
@@ -236,6 +251,16 @@ function SessionRegisterModal({ brief, onClose, onDone }: {
   useEffect(() => {
     api.get('/content').then((r) => {
       setContent(r.data)
+      // 优先真正套用约课时选择的训练计划模板(完整动作/组次/负重)
+      let applied = false
+      if (brief.template) {
+        try {
+          const tplExs = JSON.parse(brief.template.exercises_json) as ExerciseItem[]
+          if (tplExs.length) { setExs(tplExs); applied = true }
+        } catch { /* 模板解析失败则退回动作库 */ }
+      }
+      if (applied) return
+      // 无模板: 按本次重点部位从动作库预填前3个
       const prefill: ExerciseItem[] = []
       const part = brief.booking.focus_parts_list[0]
       if (part && r.data.exercise_library[part]) {

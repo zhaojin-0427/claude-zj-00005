@@ -40,7 +40,7 @@ def add_measurement(member_id: int, body: MeasurementIn, db: Session = Depends(g
         raise HTTPException(status_code=403, detail="无权限")
     m = BodyMeasurement(
         member_id=member_id,
-        measured_at=body.measured_at or datetime.utcnow(),
+        measured_at=body.measured_at or datetime.now(),
         weight=body.weight, body_fat_pct=body.body_fat_pct,
         muscle_mass=body.muscle_mass, resting_hr=body.resting_hr,
         systolic=body.systolic, diastolic=body.diastolic,

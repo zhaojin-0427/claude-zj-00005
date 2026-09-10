@@ -25,6 +25,7 @@ const NAV: { group: string; items: NavDef[] }[] = [
     group: '运营复盘',
     items: [
       { to: '/stats', label: '数据统计复盘', icon: '📊', roles: ['coach', 'admin'] },
+      { to: '/ops', label: '场地·时段·模板维护', icon: '🛠️', roles: ['coach', 'admin'] },
     ],
   },
 ]
@@ -44,6 +45,7 @@ export default function Layout({ children }: { children: ReactNode }) {
     '/coach': '教练工作台',
     '/members': '会员健康档案',
     '/stats': '数据统计复盘',
+    '/ops': '场地 · 私教时段 · 训练模板维护',
   }
   const title = titleMap[loc.pathname] ?? 'FitTrack'
 

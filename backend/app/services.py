@@ -29,7 +29,7 @@ def evaluate_goals(member_id: int, db) -> list[dict]:
         hit = value <= g.target_value if g.direction == "down" else value >= g.target_value
         if hit and not g.achieved:
             g.achieved = True
-            g.achieved_at = datetime.utcnow()
+            g.achieved_at = datetime.now()
             cycle = (g.achieved_at - g.start_at).days
             reminders.append({
                 "type": "goal_achieved",
@@ -75,19 +75,27 @@ def member_alerts(member_id: int, db) -> list[dict]:
 
 # ---------------------------------------------------------------- stats
 def _window_start(days: int | None):
-    return datetime.utcnow() - timedelta(days=days) if days else None
+    return datetime.now() - timedelta(days=days) if days else None
 
 
-def dashboard_stats(db, days: int | None = 90) -> dict:
-    start = _window_start(days)
+def _window_start_days(days: int | None, now: datetime):
+    return now - timedelta(days=days) if days else None
+
+
+def dashboard_stats(db, days: int | None = 90, now: datetime | None = None) -> dict:
+    now = now or datetime.now()
+    start = _window_start_days(days, now)
 
     slot_q = select(M.Slot)
     if start:
         slot_q = slot_q.where(M.Slot.start_time >= start)
     slots = db.scalars(slot_q).all()
-    past_slots = [s for s in slots if s.end_time <= datetime.utcnow()]
-    scheduled = [s for s in past_slots if s.status != content.SLOT_CANCELED and s.status != content.SLOT_BLOCKED]
-    utilized = [s for s in scheduled if s.status == content.SLOT_COMPLETED]
+    past_slots = [s for s in slots if s.end_time <= now]
+    # 有效排课: 取消/封禁时段不计; 爽约时段计入排课但不计利用
+    scheduled = [s for s in past_slots
+                 if s.status not in (content.SLOT_CANCELED, content.SLOT_BLOCKED)]
+    utilized = [s for s in scheduled if s.status in content.SLOT_UTILIZED]
+    no_show_slots = [s for s in scheduled if s.status == content.SLOT_NO_SHOW]
     utilization = round(100 * len(utilized) / len(scheduled), 1) if scheduled else 0.0
 
     # 每日利用率趋势
@@ -95,7 +103,7 @@ def dashboard_stats(db, days: int | None = 90) -> dict:
     for s in scheduled:
         key = s.start_time.strftime("%m-%d")
         trend_map[key]["scheduled"] += 1
-        if s.status == content.SLOT_COMPLETED:
+        if s.status in content.SLOT_UTILIZED:
             trend_map[key]["used"] += 1
     utilization_trend = [
         {"date": k, **v, "rate": round(100 * v["used"] / v["scheduled"], 1) if v["scheduled"] else 0}
@@ -189,6 +197,8 @@ def dashboard_stats(db, days: int | None = 90) -> dict:
         "window_days": days,
         "total_scheduled_slots": len(scheduled),
         "utilized_slots": len(utilized),
+        "no_show_slots": len(no_show_slots),
+        "idle_slots": len([s for s in scheduled if s.status == content.SLOT_OPEN]),
         "utilization_rate": utilization,
         "utilization_trend": utilization_trend,
         "booking_status": booking_status,
@@ -206,8 +216,8 @@ def dashboard_stats(db, days: int | None = 90) -> dict:
     }
 
 
-def coach_workbench(coach_id: int, db) -> dict:
-    now = datetime.utcnow()
+def coach_workbench(coach_id: int, db, now: datetime | None = None) -> dict:
+    now = now or datetime.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_end = now + timedelta(days=7)
 

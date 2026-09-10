@@ -14,8 +14,11 @@ VENUE_KINDS = {VENUE_AREA: "器械区", VENUE_ROOM: "团课教室"}
 SLOT_OPEN = "open"
 SLOT_BOOKED = "booked"
 SLOT_COMPLETED = "completed"
+SLOT_NO_SHOW = "no_show"
 SLOT_CANCELED = "canceled"
 SLOT_BLOCKED = "blocked"
+SLOT_UTILIZED = {SLOT_COMPLETED}               # 计入课时利用(爽约不算利用)
+SLOT_OCCUPIED = {SLOT_BOOKED, SLOT_COMPLETED, SLOT_NO_SHOW}  # 已被会员占用, 不可再约
 
 # ---- booking status ----
 BK_BOOKED = "booked"

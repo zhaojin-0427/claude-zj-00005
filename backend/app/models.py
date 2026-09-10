@@ -14,7 +14,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), index=True)  # admin / coach / member
     phone: Mapped[str] = mapped_column(String(20), default="")
     password_hash: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     coach_profile: Mapped["Coach"] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
     member_profile: Mapped["MemberProfile"] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
@@ -45,7 +45,7 @@ class MemberProfile(Base):
     limitations: Mapped[str] = mapped_column(Text, default="")     # 体能限制 / 伤病
     injuries: Mapped[str] = mapped_column(Text, default="")
     preferred_parts: Mapped[str] = mapped_column(String(200), default="")  # csv of part keys
-    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     status: Mapped[str] = mapped_column(String(20), default="active")  # active / frozen / churned
     renewal_count: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -61,7 +61,7 @@ class Package(Base):
     total_sessions: Mapped[int] = mapped_column(Integer)
     remaining: Mapped[int] = mapped_column(Integer)
     price: Mapped[float] = mapped_column(Float, default=0)
-    purchased_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    purchased_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -96,14 +96,15 @@ class Booking(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     member_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     coach_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    slot_id: Mapped[int] = mapped_column(ForeignKey("slots.id"), unique=True)
+    # 不加 unique: 取消/完结的旧预约会保留, 同一时段可被再次预约
+    slot_id: Mapped[int] = mapped_column(ForeignKey("slots.id"), index=True)
     status: Mapped[str] = mapped_column(String(12), default="booked", index=True)
     # booked / completed / no_show / canceled
     goal: Mapped[str] = mapped_column(String(30), default="")
     focus_parts: Mapped[str] = mapped_column(String(200), default="")  # csv
     limitations: Mapped[str] = mapped_column(Text, default="")
     template_id: Mapped[int | None] = mapped_column(ForeignKey("plan_templates.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     slot: Mapped[Slot] = relationship()
@@ -124,7 +125,7 @@ class TrainingSession(Base):
     leftover: Mapped[str] = mapped_column(Text, default="")                  # 上次遗留问题(开课前承接)
     next_focus: Mapped[str] = mapped_column(Text, default="")                # 下次重点
     warmup: Mapped[str] = mapped_column(String(200), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     booking: Mapped[Booking] = relationship(back_populates="session")
 
@@ -135,7 +136,7 @@ class BodyMeasurement(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     member_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    measured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    measured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     weight: Mapped[float | None] = mapped_column(Float, nullable=True)
     body_fat_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     muscle_mass: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -158,7 +159,7 @@ class Goal(Base):
     target_value: Mapped[float] = mapped_column(Float)
     direction: Mapped[str] = mapped_column(String(4))     # down / up
     start_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    start_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    start_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     achieved: Mapped[bool] = mapped_column(Boolean, default=False)
     achieved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -177,4 +178,4 @@ class PlanTemplate(Base):
     # exercises: [{name, part, sets, reps, weight, note}]
     exercises_json: Mapped[str] = mapped_column(Text, default="[]")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

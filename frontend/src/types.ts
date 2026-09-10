@@ -86,6 +86,7 @@ export interface Slot {
   end_time: string
   status: 'open' | 'booked' | 'completed' | 'canceled' | 'blocked'
   venue: Venue | null
+  coach?: { id: number; full_name: string } | null
   booking?: SlotBookingBrief
 }
 
@@ -208,6 +209,7 @@ export interface Package {
 
 export interface Brief {
   booking: Booking
+  template: PlanTemplate | null
   profile: MemberProfile | null
   measurements: Measurement[]
   measurement_diff: Record<string, number>
@@ -222,6 +224,8 @@ export interface DashboardStats {
   total_scheduled_slots: number
   utilized_slots: number
   utilization_rate: number
+  no_show_slots?: number
+  idle_slots?: number
   utilization_trend: { date: string; scheduled: number; used: number; rate: number }[]
   booking_status: { key: string; label: string; count: number }[]
   total_members: number

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import User, PlanTemplate
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..schemas import TemplateIn
 from ..serializers import template_dict
 from .. import content
@@ -26,7 +26,7 @@ def list_templates(goal: str | None = None, part: str | None = None,
 
 @router.post("")
 def create_template(body: TemplateIn, db: Session = Depends(get_db),
-                    user: User = Depends(get_current_user)):
+                    user: User = Depends(require_roles("admin", "coach"))):
     if body.goal not in content.GOALS or body.primary_part not in content.PARTS:
         raise HTTPException(status_code=400, detail="训练目标或重点部位非法")
     t = PlanTemplate(

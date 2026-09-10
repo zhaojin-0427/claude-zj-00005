@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, errText } from '../api'
+import { api, errText, localNowIso } from '../api'
 import { useAuth } from '../auth'
 import { useToast } from '../toast'
 import { Modal } from '../components/ui'
@@ -23,13 +23,14 @@ export default function BookingDesk() {
   const load = async () => {
     const base = new Date(); base.setHours(0, 0, 0, 0)
     const d0 = new Date(base.getTime() + dayOffset * DAY_MS)
-    const d1 = new Date(d0.getTime() + DAY_MS)
-    const params: any = { date_from: d0.toISOString(), date_to: d1.toISOString() }
+    const d1 = new Date(d0.getTime() + DAY_MS - 1000)
+    // 用本地时区的 naive ISO 串, 与后端墙钟时间口径一致（避免 toISOString 的 UTC 偏移）
+    const params: any = { date_from: localNowIso(d0), date_to: localNowIso(d1) }
     if (coachFilter) params.coach_id = coachFilter
     const q = new URLSearchParams(params).toString()
     const [s, m, t, c] = await Promise.all([
       api.get<Slot[]>(`/slots?${q}`),
-      api.get<Booking[]>('/bookings?status=booked'),
+      api.get<Booking[]>('/bookings?status=booked&asc=true'),
       api.get<PlanTemplate[]>('/templates'),
       api.get<{ id: number; full_name: string }[]>('/coaches'),
     ])
@@ -87,7 +88,9 @@ export default function BookingDesk() {
                     <td>{b.goal_label} · {b.focus_parts_labels.join('/') || '全身'}</td>
                     <td><span className={STATUS_CLS[b.status]}>{STATUS_LABEL[b.status]}</span></td>
                     <td className="right">
-                      <button className="btn btn-danger btn-sm" onClick={() => cancel(b.id)}>取消预约</button>
+                      {new Date(b.slot?.start_time ?? 0).getTime() <= Date.now()
+                        ? <span className="tag tag-gray" title="开课后不可在线取消">已开课</span>
+                        : <button className="btn btn-danger btn-sm" onClick={() => cancel(b.id)}>取消预约</button>}
                     </td>
                   </tr>
                 ))}
@@ -115,23 +118,32 @@ export default function BookingDesk() {
           <div className="slot-grid">
             {slots.map((s) => {
               const t = new Date(s.start_time)
+              const endT = new Date(s.end_time)
+              const hh = (n: number) => String(n).padStart(2, '0')
               const booked = s.status !== 'open'
+              const started = endT.getTime() <= Date.now()
+              const ongoing = !started && t.getTime() <= Date.now()
               return (
-                <div key={s.id} className={`slot-card ${booked ? 'booked' : ''}`}>
-                  <div className="slot-time">{String(t.getHours()).padStart(2, '0')}:00 - {String(t.getHours() + 1).padStart(2, '0')}:00</div>
+                <div key={s.id} className={`slot-card ${booked || started ? 'booked' : ''}`}>
+                  <div className="slot-time">{hh(t.getHours())}:{hh(t.getMinutes())} - {hh(endT.getHours())}:{hh(endT.getMinutes())}</div>
                   <div className="slot-meta">
+                    <span>🏃 {s.coach?.full_name ?? '待定教练'}</span>
                     <span>🏟️ {s.venue?.name} · {s.venue?.kind_label}</span>
                     <span>
-                      {s.status === 'open'
-                        ? <span className="tag tag-green">可预约</span>
-                        : s.status === 'booked'
-                          ? <span className="tag tag-gray">已被预约{s.booking ? ` · ${s.booking.member_name}` : ''}</span>
-                          : <span className="tag tag-gray">已结束</span>}
+                      {started
+                        ? <span className="tag tag-gray">已结束</span>
+                        : ongoing
+                          ? <span className="tag tag-amber">进行中</span>
+                          : s.status === 'open'
+                            ? <span className="tag tag-green">可预约</span>
+                            : <span className="tag tag-gray">已被预约</span>}
                     </span>
                   </div>
-                  {s.status === 'open'
-                    ? <button className="btn btn-primary btn-sm btn-block" onClick={() => setTarget(s)}>预约此时段</button>
-                    : <button className="btn btn-ghost btn-sm btn-block" disabled>不可约</button>}
+                  {started || ongoing
+                    ? <button className="btn btn-ghost btn-sm btn-block" disabled>{started ? '已结束' : '课程进行中'}</button>
+                    : s.status === 'open'
+                      ? <button className="btn btn-primary btn-sm btn-block" onClick={() => setTarget(s)}>预约此时段</button>
+                      : <button className="btn btn-ghost btn-sm btn-block" disabled>已被预约</button>}
                 </div>
               )
             })}
@@ -174,7 +186,11 @@ function BookingModal({ slot, content, templates, defaultLimitations, onClose, o
   const applyTemplate = (id: string) => {
     setTemplateId(id ? Number(id) : null)
     const t = templates.find((x) => x.id === Number(id))
-    if (t) { setGoal(t.goal); setParts([t.primary_part]) }
+    if (t) {
+      setGoal(t.goal)
+      // 仅在用户尚未选择部位时, 用模板主练部位预填, 不覆盖已选
+      setParts((cur) => cur.length ? cur : [t.primary_part])
+    }
   }
 
   const submit = async () => {
@@ -190,9 +206,13 @@ function BookingModal({ slot, content, templates, defaultLimitations, onClose, o
   }
 
   const matchedTemplates = templates.filter((t) => !goal || t.goal === goal)
+  const selectedTpl = templates.find((t) => t.id === templateId)
+  let tplExs: any[] = []
+  if (selectedTpl) { try { tplExs = JSON.parse(selectedTpl.exercises_json) } catch { /* ignore */ } }
 
   return (
     <Modal title={`预约私教课 · ${fmtDateTime(slot.start_time)}`} onClose={onClose} wide>
+      <div className="kv"><span>授课教练</span><b>{slot.coach?.full_name ?? '系统安排'}</b></div>
       <div className="kv"><span>训练场地</span><b>{slot.venue?.name}（{slot.venue?.kind_label}）</b></div>
 
       <label className="fld mt12"><span>一键套用训练计划模板</span>
@@ -203,6 +223,18 @@ function BookingModal({ slot, content, templates, defaultLimitations, onClose, o
           ))}
         </select>
       </label>
+      {selectedTpl && (
+        <div className="card soft mb16" style={{ padding: 14 }}>
+          <div className="muted mb8" style={{ fontSize: 12.5 }}>
+            📋 已套用「{selectedTpl.name}」· {selectedTpl.description || '教练课后登记将自动带入以下动作'}
+          </div>
+          {tplExs.map((e: any, i: number) => (
+            <span key={i} className="exercise-pill">{e.name}
+              <b>{e.sets}×{e.reps}</b>{e.weight > 0 && <span className="faint">{e.weight}kg</span>}
+            </span>
+          ))}
+        </div>
+      )}
 
       <label className="fld"><span>训练目标 *</span></label>
       <div className="chk-row mb16">

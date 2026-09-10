@@ -8,8 +8,9 @@ from ..database import get_db
 from ..models import (User, Slot, Booking, Package, TrainingSession,
                       MemberProfile, BodyMeasurement, Goal, PlanTemplate)
 from ..deps import get_current_user
+from ..timeutil import client_now
 from ..schemas import BookingCreate, SessionIn
-from ..serializers import booking_dict, session_dict, goal_dict, member_profile_dict
+from ..serializers import booking_dict, session_dict, goal_dict, member_profile_dict, template_dict
 from ..services import evaluate_goals
 from .. import content
 
@@ -28,12 +29,19 @@ def _load_related(db, bookings):
     return out
 
 
+def _order_by_time(stmt, asc: bool):
+    col = Slot.start_time
+    stmt = stmt.join(Slot, Booking.slot_id == Slot.id)
+    return stmt.order_by(col.asc() if asc else col.desc())
+
+
 @router.get("")
 def list_bookings(
     status: str | None = None,
     member_id: int | None = None,
     coach_id: int | None = None,
     scope: str = "all",
+    asc: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -48,13 +56,15 @@ def list_bookings(
         stmt = stmt.where(Booking.member_id == member_id)
     if status:
         stmt = stmt.where(Booking.status == status)
-    bookings = db.scalars(stmt.order_by(Booking.id.desc())).all()
+    stmt = _order_by_time(stmt, asc)
+    bookings = db.scalars(stmt).all()
     return _load_related(db, bookings)
 
 
 @router.post("")
 def create_booking(body: BookingCreate, db: Session = Depends(get_db),
-                   user: User = Depends(get_current_user)):
+                   user: User = Depends(get_current_user),
+                   now: datetime = Depends(client_now)):
     if user.role != "member":
         raise HTTPException(status_code=403, detail="只有会员可以发起约课")
     slot = db.get(Slot, body.slot_id)
@@ -62,6 +72,25 @@ def create_booking(body: BookingCreate, db: Session = Depends(get_db),
         raise HTTPException(status_code=404, detail="时段不存在")
     if slot.status != content.SLOT_OPEN:
         raise HTTPException(status_code=400, detail="该时段已被预约或不可约")
+    if slot.start_time <= now:
+        raise HTTPException(status_code=400, detail="课程已开始或已结束，无法预约（请选择未来时段）")
+    # 双重保险: 旧的已取消预约不占名额, 但要确认没有生效中的预约
+    active = db.scalar(
+        select(Booking).where(
+            Booking.slot_id == slot.id,
+            Booking.status.in_([content.BK_BOOKED, content.BK_COMPLETED, content.BK_NO_SHOW]))
+    )
+    if active:
+        raise HTTPException(status_code=400, detail="该时段已有生效预约")
+    # 同一会员同一时间不能重复约课
+    clash = db.scalar(
+        select(Booking).join(Slot, Booking.slot_id == Slot.id).where(
+            Booking.member_id == user.id,
+            Booking.status == content.BK_BOOKED,
+            Slot.start_time < slot.end_time, Slot.end_time > slot.start_time)
+    )
+    if clash:
+        raise HTTPException(status_code=400, detail="你在该时段已有另一节私教课，时间冲突")
     remaining = db.scalar(
         select(func.coalesce(func.sum(Package.remaining), 0))
         .where(Package.member_id == user.id)
@@ -76,6 +105,8 @@ def create_booking(body: BookingCreate, db: Session = Depends(get_db),
         limitations=body.limitations, template_id=body.template_id,
     )
     db.add(b)
+    # 预约即占用 1 课时（待上课计入占用），取消时返还
+    _consume_session(user.id, db)
     db.commit()
     return booking_dict(b, member=user, coach=db.get(User, slot.coach_id))
 
@@ -99,7 +130,8 @@ def booking_detail(booking_id: int, db: Session = Depends(get_db),
 
 @router.post("/{booking_id}/cancel")
 def cancel_booking(booking_id: int, db: Session = Depends(get_db),
-                   user: User = Depends(get_current_user)):
+                   user: User = Depends(get_current_user),
+                   now: datetime = Depends(client_now)):
     b = db.get(Booking, booking_id)
     if not b:
         raise HTTPException(status_code=404, detail="预约不存在")
@@ -109,9 +141,12 @@ def cancel_booking(booking_id: int, db: Session = Depends(get_db),
         raise HTTPException(status_code=403, detail="无权限")
     if b.status != content.BK_BOOKED:
         raise HTTPException(status_code=400, detail="只有待上课的预约可以取消")
+    if b.slot.start_time <= now:
+        raise HTTPException(status_code=400, detail="课程已开始或已结束，无法在线取消，请联系教练处理")
     b.status = content.BK_CANCELED
-    b.canceled_at = datetime.utcnow()
+    b.canceled_at = now
     b.slot.status = content.SLOT_OPEN
+    _refund_session(b.member_id, db)  # 取消返还预约时占用的课时
     db.commit()
     return {"ok": True}
 
@@ -128,11 +163,11 @@ def pre_class_brief(booking_id: int, db: Session = Depends(get_db),
     member = db.get(User, b.member_id)
 
     history = db.scalars(
-        select(Booking).where(
+        select(Booking).join(Slot, Booking.slot_id == Slot.id).where(
             Booking.member_id == b.member_id,
             Booking.status == content.BK_COMPLETED,
             Booking.id != b.id,
-        ).order_by(Booking.id.desc()).limit(20)
+        ).order_by(Slot.start_time.desc()).limit(20)
     ).all()
     history_data = [booking_dict(x, member=None, coach=db.get(User, x.coach_id)) for x in history]
 
@@ -160,8 +195,15 @@ def pre_class_brief(booking_id: int, db: Session = Depends(get_db),
             value = getattr(m, g.metric, None)
         goal_data.append(goal_dict(g, current_value=value))
 
+    template = None
+    if b.template_id:
+        tpl = db.get(PlanTemplate, b.template_id)
+        if tpl:
+            template = template_dict(tpl)
+
     return {
         "booking": booking_dict(b, member=member, coach=db.get(User, b.coach_id)),
+        "template": template,
         "profile": member_profile_dict(member.member_profile) if member and member.member_profile else None,
         "measurements": [
             {"measured_at": m.measured_at, "weight": m.weight, "body_fat_pct": m.body_fat_pct,
@@ -176,7 +218,8 @@ def pre_class_brief(booking_id: int, db: Session = Depends(get_db),
     }
 
 
-def _deduct_session(member_id: int, db: Session):
+def _consume_session(member_id: int, db: Session):
+    """预约即占用 1 课时: 从最早的有余量课包扣减。"""
     pkg = db.scalar(
         select(Package).where(Package.member_id == member_id, Package.remaining > 0)
         .order_by(Package.purchased_at)
@@ -186,9 +229,25 @@ def _deduct_session(member_id: int, db: Session):
     pkg.remaining -= 1
 
 
+def _refund_session(member_id: int, db: Session):
+    """取消预约: 返还 1 课时到最近的未满课包(没有则并入最早课包)。"""
+    pkg = db.scalar(
+        select(Package).where(
+            Package.member_id == member_id, Package.remaining < Package.total_sessions)
+        .order_by(Package.purchased_at.desc())
+    )
+    if not pkg:
+        pkg = db.scalar(
+            select(Package).where(Package.member_id == member_id)
+            .order_by(Package.purchased_at))
+    if pkg:
+        pkg.remaining += 1
+
+
 @router.post("/{booking_id}/session")
 def register_session(booking_id: int, body: SessionIn, db: Session = Depends(get_db),
-                     user: User = Depends(get_current_user)):
+                     user: User = Depends(get_current_user),
+                     now: datetime = Depends(client_now)):
     """课后登记动作清单/负重/RPE/下次重点并完结课程。"""
     b = db.get(Booking, booking_id)
     if not b:
@@ -197,6 +256,8 @@ def register_session(booking_id: int, body: SessionIn, db: Session = Depends(get
         raise HTTPException(status_code=403, detail="仅授课教练可登记训练记录")
     if b.status not in (content.BK_BOOKED, content.BK_COMPLETED):
         raise HTTPException(status_code=400, detail="该预约状态不允许登记")
+    if b.status == content.BK_BOOKED and b.slot.start_time > now:
+        raise HTTPException(status_code=400, detail="课程尚未开始，不能提前登记（可在开课后补录）")
 
     exercises = [e.model_dump() for e in body.exercises]
     first_time = b.session is None
@@ -216,7 +277,7 @@ def register_session(booking_id: int, body: SessionIn, db: Session = Depends(get
     if first_time:
         b.status = content.BK_COMPLETED
         b.slot.status = content.SLOT_COMPLETED
-        _deduct_session(b.member_id, db)
+        # 课时已在预约时占用, 完结时不再重复扣减
 
     db.commit()
     db.refresh(b)
@@ -227,7 +288,8 @@ def register_session(booking_id: int, body: SessionIn, db: Session = Depends(get
 
 @router.post("/{booking_id}/no-show")
 def mark_no_show(booking_id: int, db: Session = Depends(get_db),
-                 user: User = Depends(get_current_user)):
+                 user: User = Depends(get_current_user),
+                 now: datetime = Depends(client_now)):
     b = db.get(Booking, booking_id)
     if not b:
         raise HTTPException(status_code=404, detail="预约不存在")
@@ -237,8 +299,10 @@ def mark_no_show(booking_id: int, db: Session = Depends(get_db),
         raise HTTPException(status_code=403, detail="无权限")
     if b.status != content.BK_BOOKED:
         raise HTTPException(status_code=400, detail="只有待上课的预约可以标记爽约")
+    if b.slot.start_time > now:
+        raise HTTPException(status_code=400, detail="课程尚未开始，不能提前标记爽约")
     b.status = content.BK_NO_SHOW
-    b.slot.status = content.SLOT_COMPLETED
-    _deduct_session(b.member_id, db)  # 爽约按课耗扣除
+    b.slot.status = content.SLOT_NO_SHOW
+    # 爽约按课耗: 预约时占用的课时不返还
     db.commit()
     return {"ok": True}
