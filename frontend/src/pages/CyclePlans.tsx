@@ -83,10 +83,11 @@ export default function CyclePlans({ viewer }: { viewer: 'staff' | 'member' }) {
 
                 <div className="mt12">
                   <div className="flex-between" style={{ fontSize: 12.5 }}>
-                    <span className="muted">单元执行率</span>
-                    <b>{s.completed_units}/{s.total_units} · {s.completion_rate}%</b>
+                    <span className="muted">到期执行率</span>
+                    <b>{s.completed_units}/{s.due_units} · {s.completion_rate ?? '-'}%</b>
                   </div>
-                  <div className="progress"><div style={{ width: `${s.completion_rate}%` }} /></div>
+                  <div className="progress"><div style={{ width: `${s.completion_rate ?? 0}%` }} /></div>
+                  <div className="faint mt8" style={{ fontSize: 11.5 }}>共 {s.total_units} 单元（未来 {s.total_units - s.due_units} 单元未到期不计入）</div>
                 </div>
                 <div className="grid mt12" style={{ gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                   <div className="plan-kpi">

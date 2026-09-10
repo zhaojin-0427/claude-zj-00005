@@ -4,7 +4,7 @@ import { useAuth } from '../auth'
 import { useToast } from '../toast'
 import { Modal } from '../components/ui'
 import { Booking, ContentBundle, PlanTemplate, PlanUnitBrief, Slot } from '../types'
-import { fmtDateTime, STATUS_CLS, STATUS_LABEL, weekdayLabel } from '../utils'
+import { fmtDateTime, STATUS_CLS, STATUS_LABEL, unitTitle, weekdayLabel } from '../utils'
 
 const DAY_MS = 86400000
 
@@ -117,7 +117,7 @@ export default function BookingDesk() {
                     <td>{b.slot?.venue?.name} <span className="faint">({b.slot?.venue?.kind_label})</span></td>
                     <td>{b.goal_label} · {b.focus_parts_labels.join('/') || '全身'}
                       {b.plan_unit && <div className="tag tag-purple mt8" style={{ width: 'fit-content' }}>
-                        🔁 {b.plan_unit.week_no ? `第${b.plan_unit.week_no}周·` : ''}{b.plan_unit.title || '周期单元'}
+                        🔁 {unitTitle(b.plan_unit)}
                       </div>}
                     </td>
                     <td><span className={STATUS_CLS[b.status]}>{STATUS_LABEL[b.status]}</span></td>
@@ -221,6 +221,8 @@ function BookingModal({ slot, content, templates, units, defaultLimitations, onC
     setParts((arr) => arr.includes(p) ? arr.filter((x) => x !== p) : [...arr, p])
 
   const selectedUnit = units.find((u) => u.id === unitId) || null
+  // 单元必须与所选时段归属同一位教练（后端亦会强校验）
+  const unitCoachMismatch = !!selectedUnit && slot.coach?.id != null && selectedUnit.coach_id !== slot.coach.id
 
   const applyTemplate = (id: string) => {
     setTemplateId(id ? Number(id) : null)
@@ -244,6 +246,10 @@ function BookingModal({ slot, content, templates, units, defaultLimitations, onC
 
   const submit = async () => {
     if (!parts.length) { toast('请至少选择一个重点部位', 'err'); return }
+    if (unitCoachMismatch) {
+      toast(`该训练单元属于 ${selectedUnit?.coach_name}，请选择 ${selectedUnit?.coach_name} 教练的时段`, 'err')
+      return
+    }
     setBusy(true)
     try {
       await api.post('/bookings', {
@@ -273,13 +279,22 @@ function BookingModal({ slot, content, templates, units, defaultLimitations, onC
             const overdue = new Date(u.scheduled_date + 'T23:59:59').getTime() < Date.now()
             return (
               <option key={u.id} value={u.id}>
-                {u.scheduled_date}（{overdue ? '逾期·' : ''}{u.plan_name} · {u.title || `第${u.week_no}周`}）
+                {u.scheduled_date}（{overdue ? '逾期·' : ''}{u.plan_name} · {u.title || `第${u.week_no}周`} · {u.coach_name}）
               </option>
             )
           })}
         </select>
       </label>
-      {selectedUnit && (
+      {unitCoachMismatch && (
+        <div className="alert alert-warn mb12">
+          <span>⚠️</span>
+          <div>
+            该单元属于 <b>{selectedUnit?.coach_name}</b> 的周期计划，但你当前选择的是
+            <b> {slot.coach?.full_name} </b>的时段。请改选 {selectedUnit?.coach_name} 教练的时段，或取消关联单元。
+          </div>
+        </div>
+      )}
+      {selectedUnit && !unitCoachMismatch && (
         <div className="card soft mb16" style={{ padding: 14, borderColor: 'rgba(34,211,167,0.4)' }}>
           <div className="muted mb8" style={{ fontSize: 12.5 }}>
             🔁 将关联「{selectedUnit.plan_name}」第{selectedUnit.week_no}周单元

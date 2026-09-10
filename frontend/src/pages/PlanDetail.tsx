@@ -7,7 +7,7 @@ import { Loading, Modal } from '../components/ui'
 import { ContentBundle, CyclePlan, ExerciseItem, PlanUnit } from '../types'
 import {
   fmtDate, fmtDateTime, fmtVolume, parseEx, PLAN_STATE_CLS, PLAN_STATE_LABEL,
-  UNIT_CLS, UNIT_LABEL,
+  UNIT_CLS, UNIT_LABEL, unitTitle,
 } from '../utils'
 
 const WEEK_HEAD = ['一', '二', '三', '四', '五', '六', '日']
@@ -97,10 +97,13 @@ export default function PlanDetail() {
 
         <div className="grid grid-4 mt16">
           <div className="plan-kpi-card">
-            <div className="faint" style={{ fontSize: 12 }}>单元执行率</div>
-            <div className="value" style={{ fontSize: 24, fontWeight: 800 }}>{s.completion_rate}<small>%</small></div>
-            <div className="progress mt8"><div style={{ width: `${s.completion_rate}%` }} /></div>
-            <div className="faint mt8" style={{ fontSize: 12 }}>已完课 {s.completed_units} / 共 {s.total_units} 单元</div>
+            <div className="faint" style={{ fontSize: 12 }}>到期执行率</div>
+            <div className="value" style={{ fontSize: 24, fontWeight: 800 }}>{s.completion_rate ?? '-'}<small>%</small></div>
+            <div className="progress mt8"><div style={{ width: `${s.completion_rate ?? 0}%` }} /></div>
+            <div className="faint mt8" style={{ fontSize: 12 }}>
+              已完课 {s.completed_units} / 已到期 {s.due_units} 单元
+              {s.total_units - s.due_units > 0 && `（另有 ${s.total_units - s.due_units} 个未来单元）`}
+            </div>
           </div>
           <div className="plan-kpi-card">
             <div className="faint" style={{ fontSize: 12 }}>动作完成率（均值）</div>
@@ -218,7 +221,7 @@ function CalendarGrid({ month, plan, unitByDate, onPick }: {
                   <div key={u.id} className={`cal-dot cal-${u.status}`} title={`${u.title} · ${UNIT_LABEL[u.status]}`}
                     onClick={() => onPick(u)}>
                     <span className="cal-dot-mark" />
-                    {u.title || `第${u.week_no}周`}
+                    {unitTitle(u)}
                   </div>
                 ))}
               </div>
@@ -251,7 +254,7 @@ function UnitRow({ u, isStaff, onOpen, onEdit, onBook }: {
     <div className="unit-row" onClick={onOpen}>
       <div className="flex-between">
         <div>
-          <b style={{ fontSize: 13.5 }}>{u.title || `第${u.week_no}周训练`}</b>
+          <b style={{ fontSize: 13.5 }}>{unitTitle(u)}</b>
           <div className="faint" style={{ fontSize: 12 }}>{fmtDate(u.scheduled_date)} · {u.focus_parts_labels.join('/') || '全身'}</div>
         </div>
         <span className={UNIT_CLS[u.status]}>{UNIT_LABEL[u.status]}</span>

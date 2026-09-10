@@ -392,11 +392,12 @@ def _seed_cycle_plans(db, member_users, templates, tmpl_by_goal, coach_users,
         return planned
 
     # username -> (计划名, 未来已约单元数, 未来未安排单元数, 纯逾期未安排数)
+    # 张伟按到期口径 10/13≈76.9%（不误报低完成率）；陈静漏训较多用于演示低完成率提醒
     plan_specs = {
         "zhangwei": ("减脂周期训练计划（8周）", 2, 2, 2),
         "wangqiang": ("增肌周期训练计划（8周）", 1, 2, 1),
         "lina": ("翘臀塑形周期计划（8周）", 1, 1, 1),
-        "chenjing": ("下肢燃脂周期计划（8周）", 0, 2, 2),
+        "chenjing": ("下肢燃脂周期计划（8周）", 0, 2, 6),
     }
     weeks = 8
     start_date = TODAY - timedelta(days=int(TODAY.weekday()) + 7 * (weeks - 3))
@@ -436,9 +437,11 @@ def _seed_cycle_plans(db, member_users, templates, tmpl_by_goal, coach_users,
                 planned_note=note, status=content.UNIT_UNSCHEDULED,
             )
 
-        # 1) 已完课单元: 从该会员的完课记录中按计划周期选最近的若干节挂载
+        # 1) 已完课单元: 挂载计划周期内的完课记录
+        # 陈静只挂前 7 节、留较多逾期未排, 用于演示低完成率提醒; 其余会员挂全部在周期内的完课
         in_range = [row for row in done if start_date <= row[1].start_time.date() <= TODAY]
-        picked_done = in_range[-(weeks * 2 - future_booked_n - future_unsched_n - missed_n):][:weeks * 2]
+        target_done = 7 if u.username == "chenjing" else len(in_range)
+        picked_done = in_range[:target_done]
         used_dates = set()
         for idx, (bk, sl, actual_exs, part) in enumerate(picked_done):
             day = sl.start_time.date()
@@ -455,7 +458,8 @@ def _seed_cycle_plans(db, member_users, templates, tmpl_by_goal, coach_users,
             db.add(unit)
             db.flush()
             unit.booking_id = bk.id
-            plansvc.snapshot_completed_unit(unit, bk.session)
+            # 快照时间使用实际完课时间，回填的历史课程不会显示为"今天冻结"
+            plansvc.snapshot_completed_unit(unit, bk.session, snap_time=sl.start_time)
             # 个别单元写教练复盘备注
             if idx % 2 == 0:
                 unit.coach_note = "完成质量良好，下次可小幅递增负重"

@@ -94,13 +94,17 @@ def compute_comparison(planned: list[dict], actual: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------- 状态流转
-def snapshot_completed_unit(unit: "M.PlanUnit", session: "M.TrainingSession") -> dict:
-    """完课: 冻结计划/实际快照, 计算动作完成率与总训练量。"""
+def snapshot_completed_unit(unit: "M.PlanUnit", session: "M.TrainingSession",
+                            snap_time: datetime | None = None) -> dict:
+    """完课: 冻结计划/实际快照, 计算动作完成率与总训练量。
+
+    snap_time 默认为当前时刻; 回填历史课程时应传实际完课时间。
+    """
     planned = parse_exercises(unit.planned_exercises_json)
     actual = parse_exercises(session.exercises_json)
     cmp_ = compute_comparison(planned, actual)
     unit.status = content.UNIT_COMPLETED
-    unit.snapshot_at = datetime.now()
+    unit.snapshot_at = snap_time or datetime.now()
     unit.actual_exercises_json = session.exercises_json
     unit.actual_rpe = session.rpe
     unit.completion_rate = cmp_["completion_rate"]
@@ -145,9 +149,16 @@ def plan_summary(plan: "M.CyclePlan", now: datetime | None = None) -> dict:
     no_show = counts.get(content.UNIT_NO_SHOW, 0)
     missed = counts.get(content.UNIT_MISSED, 0)
     booked = counts.get(content.UNIT_BOOKED, 0)
+    # 逾期: 计划日期已过但仍未完成（含 missed 与尚未补约的 unscheduled）
     overdue = sum(1 for u in units
                   if u.status in (content.UNIT_UNSCHEDULED, content.UNIT_MISSED)
                   and u.scheduled_date < today)
+
+    # 到期执行率: 分母为「截至今天应执行」的单元（计划日期<=今天，含已完课/爽约/逾期/今日待上），
+    # 不含未来才到期的单元，避免未来未安排单元稀释执行率。
+    due_units = [u for u in units if u.scheduled_date <= today]
+    due_count = len(due_units)
+    completion_rate = round(100 * done / due_count, 1) if due_count else None
 
     if plan.status == content.PLAN_DRAFT:
         state, state_cls = "draft", "草稿"
@@ -173,13 +184,14 @@ def plan_summary(plan: "M.CyclePlan", now: datetime | None = None) -> dict:
 
     return {
         "total_units": total,
+        "due_units": due_count,
         "completed_units": done,
         "booked_units": booked,
         "unscheduled_units": counts.get(content.UNIT_UNSCHEDULED, 0),
         "no_show_units": no_show,
         "missed_units": missed,
         "overdue_units": overdue,
-        "completion_rate": round(100 * done / total, 1) if total else 0.0,
+        "completion_rate": completion_rate,
         "avg_exercise_completion": avg_completion,
         "planned_volume": planned_vol,
         "actual_volume": actual_vol,
@@ -215,15 +227,19 @@ def coach_plan_alerts(coach_id: int, db, now: datetime | None = None) -> dict:
     low_rate = []
     for p in plans:
         s = plan_summary(p, now)
-        settled = s["completed_units"] + s["no_show_units"] + s["missed_units"]
-        if settled >= 3 and s["completion_rate"] < content.LOW_COMPLETION_THRESHOLD:
+        due_count = s["due_units"]
+        rate = s["completion_rate"]
+        # 至少有 3 个应执行单元且到期执行率低于阈值才提醒（未来单元不计入分母）
+        if due_count >= 3 and rate is not None and rate < content.LOW_COMPLETION_THRESHOLD:
             member = db.get(M.User, p.member_id)
             low_rate.append({
                 "plan_id": p.id, "member_id": p.member_id,
                 "member_name": member.full_name if member else "—",
                 "plan_name": p.name, "weeks": p.weeks,
-                "completion_rate": s["completion_rate"],
-                "completed_units": s["completed_units"], "total_units": s["total_units"],
+                "completion_rate": rate,
+                "completed_units": s["completed_units"],
+                "due_units": due_count,
+                "total_units": s["total_units"],
                 "avg_exercise_completion": s["avg_exercise_completion"],
             })
     low_rate.sort(key=lambda x: x["completion_rate"])

@@ -65,10 +65,10 @@ function PlanBody({ plan, onPick }: { plan: CyclePlan; onPick: (u: PlanUnit) => 
         </div>
         <div className="grid grid-4 mt16">
           <div className="plan-kpi-card">
-            <div className="faint" style={{ fontSize: 12 }}>单元执行率</div>
-            <div style={{ fontSize: 22, fontWeight: 800 }}>{s.completion_rate}%</div>
-            <div className="progress mt8"><div style={{ width: `${s.completion_rate}%` }} /></div>
-            <div className="faint mt8" style={{ fontSize: 12 }}>{s.completed_units}/{s.total_units} 单元</div>
+            <div className="faint" style={{ fontSize: 12 }}>到期执行率</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{s.completion_rate ?? '-'}%</div>
+            <div className="progress mt8"><div style={{ width: `${s.completion_rate ?? 0}%` }} /></div>
+            <div className="faint mt8" style={{ fontSize: 12 }}>{s.completed_units}/{s.due_units} 已到期（共 {s.total_units}）</div>
           </div>
           <div className="plan-kpi-card">
             <div className="faint" style={{ fontSize: 12 }}>动作完成率</div>

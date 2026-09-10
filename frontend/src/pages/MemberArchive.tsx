@@ -109,14 +109,14 @@ export default function MemberArchive() {
           {plans.length === 0 ? <div className="empty">该会员暂无周期计划</div> : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>计划</th><th>周期</th><th>状态</th><th>执行率</th><th>动作完成率</th><th>实际/计划训练量</th><th></th></tr></thead>
+                <thead><tr><th>计划</th><th>周期</th><th>状态</th><th>到期执行率</th><th>动作完成率</th><th>实际/计划训练量</th><th></th></tr></thead>
                 <tbody>
                   {plans.map((p) => (
                     <tr key={p.id}>
                       <td><b>{p.name}</b><div className="faint" style={{ fontSize: 12 }}>{p.goal_label}</div></td>
                       <td style={{ fontSize: 12.5 }}>{fmtDate(p.start_date)}<br />~ {fmtDate(p.end_date)}</td>
                       <td><span className={PLAN_STATE_CLS[p.summary.state]}>{PLAN_STATE_LABEL[p.summary.state]}</span></td>
-                      <td>{p.summary.completion_rate}%<div className="faint" style={{ fontSize: 12 }}>{p.summary.completed_units}/{p.summary.total_units} 单元</div></td>
+                      <td>{p.summary.completion_rate ?? '-'}%<div className="faint" style={{ fontSize: 12 }}>{p.summary.completed_units}/{p.summary.due_units} 已到期</div></td>
                       <td>{p.summary.avg_exercise_completion ?? '-'}%</td>
                       <td style={{ fontSize: 12.5 }}>{fmtVolume(p.summary.actual_volume)}<br /><span className="faint">/ {fmtVolume(p.summary.planned_volume)}</span></td>
                       <td className="right"><Link className="btn btn-ghost btn-sm" to={`/plans/${p.id}`}>查看复盘</Link></td>

@@ -79,3 +79,8 @@ export function fmtVolume(v: number | null | undefined): string {
 export function parseEx(json: string | null | undefined): any[] {
   return parseExercises(json || '[]')
 }
+
+/** 单元标题：优先用编排时填写的标题（其本身可能已含「第N周」），为空时回退到「第N周训练」。 */
+export function unitTitle(u: { title?: string | null; week_no?: number | null }): string {
+  return u.title || `第${u.week_no ?? '?'}周训练`
+}

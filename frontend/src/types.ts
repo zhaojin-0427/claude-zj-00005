@@ -256,6 +256,8 @@ export interface PlanUnitBrief {
   planned_volume: number | null
   actual_volume: number | null
   plan_name?: string
+  coach_id?: number
+  coach_name?: string
   booking?: { id: number; start_time: string; status: string }
 }
 
@@ -292,13 +294,14 @@ export interface PlanUnit extends PlanUnitBrief {
 
 export interface PlanSummary {
   total_units: number
+  due_units: number
   completed_units: number
   booked_units: number
   unscheduled_units: number
   no_show_units: number
   missed_units: number
   overdue_units: number
-  completion_rate: number
+  completion_rate: number | null
   avg_exercise_completion: number | null
   planned_volume: number
   actual_volume: number
@@ -372,6 +375,7 @@ export interface LowCompletionAlert {
   weeks: number
   completion_rate: number
   completed_units: number
+  due_units: number
   total_units: number
   avg_exercise_completion: number | null
 }

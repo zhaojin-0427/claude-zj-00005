@@ -52,63 +52,99 @@ export default function PlanEditor() {
 
   const template = templates.find((t) => t.id === templateId) || null
 
-  // 按周/频次/锚定星期自动生成训练单元
+  // 自动生成：首练日 = 开始日期当天或之后的第一个「选定星期」，之后每周同日推进、
+  // 同周按间隔排布（日期单调递增、不早于开始日、超出结束日的单元自动舍弃）。
   const autofill = () => {
     if (!template) { toast('请先选择基础模板', 'err'); return }
     const exs = parseEx(template.exercises_json) as ExerciseItem[]
     const start = new Date(startDate + 'T00:00:00')
-    const monday = new Date(start)
-    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7))
-    // 间隔排布: 以选定星期(周一=0)为每周首练, 每周 2 练间隔 3 天、3 练间隔 2 天
+    const end = new Date(endDate + 'T00:00:00')
+    const startWeekday = (start.getDay() + 6) % 7
+    const delta0 = (autoWeekday - startWeekday + 7) % 7   // 距首个选定星期的天数
+    const first = new Date(start); first.setDate(start.getDate() + delta0)
     const gaps = unitsPerWeek >= 3 ? [0, 2, 4] : unitsPerWeek === 2 ? [0, 3] : [0]
-    const next: PlanUnitInput[] = []
+    const candidates: Date[] = []
     for (let w = 0; w < weeks; w++) {
-      gaps.slice(0, unitsPerWeek).forEach((g, i) => {
-        const d = new Date(monday)
-        d.setDate(monday.getDate() + w * 7 + autoWeekday + g)
-        next.push({
-          week_no: w + 1,
-          scheduled_date: isoDate(d),
-          title: `第${w + 1}周·第${i + 1}练 · ${template.primary_part_label}`,
-          goal: template.goal,
-          focus_parts: [template.primary_part],
-          exercises: exs.map((e) => ({ ...e })),
-          note: '',
-        })
+      gaps.slice(0, unitsPerWeek).forEach((g) => {
+        const d = new Date(first); d.setDate(first.getDate() + w * 7 + g)
+        if (d >= start && d <= end) candidates.push(d)
+      })
+    }
+    candidates.sort((a, b) => a.getTime() - b.getTime())
+    const next: PlanUnitInput[] = []
+    const seen = new Set<string>()
+    for (const d of candidates) {
+      const key = isoDate(d)
+      if (seen.has(key)) continue
+      seen.add(key)
+      const weekNo = Math.max(1, Math.min(weeks, Math.floor((d.getTime() - start.getTime()) / 604800000) + 1))
+      next.push({
+        week_no: weekNo,
+        scheduled_date: key,
+        title: `第${weekNo}周·${template.primary_part_label}`,
+        goal: template.goal,
+        focus_parts: [template.primary_part],
+        exercises: exs.map((e) => ({ ...e })),
+        note: '',
       })
     }
     setUnits(next)
     toast(`已生成 ${next.length} 个训练单元，可逐单元微调`)
   }
 
+
   const patchUnit = (i: number, k: keyof PlanUnitInput, v: any) =>
     setUnits((arr) => arr.map((u, j) => j === i ? { ...u, [k]: v } : u))
   const patchEx = (ui: number, ei: number, k: keyof ExerciseItem, v: any) =>
     setUnits((arr) => arr.map((u, j) => j === ui
       ? { ...u, exercises: u.exercises.map((e, x) => x === ei ? { ...e, [k]: v } : e) } : u))
+  const removeEx = (ui: number, ei: number) =>
+    setUnits((arr) => arr.map((u, j) => j === ui
+      ? { ...u, exercises: u.exercises.filter((_, x) => x !== ei) } : u))
+  const addEx = (ui: number) =>
+    setUnits((arr) => arr.map((u, j) => j === ui
+      ? { ...u, exercises: [...u.exercises, {
+          name: '', part: u.focus_parts[0] || (template?.primary_part ?? 'fullbody'),
+          sets: 3, reps: '10', weight: 0, note: '',
+        }] } : u))
+  const addExFromLibrary = (ui: number, part: string) => {
+    const lib = content?.exercise_library[part] ?? []
+    setUnits((arr) => arr.map((u, j) => {
+      if (j !== ui) return u
+      const added: ExerciseItem[] = lib.map(([n, nt, w]) => ({ name: n, part, sets: 3, reps: '10', weight: w, note: nt }))
+      return { ...u, exercises: [...u.exercises, ...added] }
+    }))
+  }
   const removeUnit = (i: number) => setUnits((arr) => arr.filter((_, j) => j !== i))
   const addUnit = () => {
     const d = new Date(startDate + 'T00:00:00')
     d.setDate(d.getDate() + units.length * 3)
     setUnits((a) => [...a, {
-      week_no: Math.min(weeks, Math.floor(a.length / unitsPerWeek) + 1),
-      scheduled_date: isoDate(d), title: `自定义单元`, goal,
+      week_no: Math.min(weeks, Math.floor(a.length / Math.max(1, unitsPerWeek)) + 1),
+      scheduled_date: isoDate(d) > endDate ? endDate : isoDate(d), title: '自定义单元', goal,
       focus_parts: template ? [template.primary_part] : [],
-      exercises: template ? parseEx(template.exercises_json) : [], note: '',
+      exercises: [], note: '',
     }])
   }
 
   const submit = async (asDraft: boolean) => {
     if (!memberId) { toast('请选择会员', 'err'); return }
     if (!name.trim()) { toast('请填写计划名称', 'err'); return }
-    if (units.length === 0) { toast('请至少编排 1 个训练单元（可使用自动生成）', 'err'); return }
+    if (!asDraft && units.length === 0) { toast('请至少编排 1 个训练单元（可使用自动生成）', 'err'); return }
     if (units.some((u) => u.scheduled_date < startDate || u.scheduled_date > endDate)) {
       toast('存在超出计划周期日期的单元', 'err'); return
+    }
+    if (units.some((u) => u.week_no < 1 || u.week_no > weeks)) {
+      toast('存在周次超出 1~' + weeks + ' 的单元', 'err'); return
+    }
+    if (!asDraft && units.some((u) => u.exercises.some((e) => !e.name.trim()))) {
+      toast('存在未填写名称的动作，请补全或删除', 'err'); return
     }
     setBusy(true)
     const payload: CyclePlanInput = {
       member_id: memberId, template_id: templateId, name: name.trim(), goal,
-      weeks, start_date: startDate, note, status: asDraft ? 'draft' : 'published', units,
+      weeks, start_date: startDate, note, status: asDraft ? 'draft' : 'published',
+      units: units.map((u) => ({ ...u, exercises: u.exercises.map((e) => ({ ...e, name: e.name.trim() })) })),
     }
     try {
       const { data } = await api.post('/plans', payload)
@@ -223,18 +259,36 @@ export default function PlanEditor() {
                         </select>
                       </div>
                     </td>
-                    <td style={{ minWidth: 300 }}>
+                    <td style={{ minWidth: 360 }}>
+                      {u.exercises.length === 0 && (
+                        <div className="faint mb8" style={{ fontSize: 12 }}>尚无动作，请手动添加或从动作库按部位预填</div>
+                      )}
                       {u.exercises.map((ex, ei) => (
                         <div key={ei} className="flex gap6 mb8" style={{ alignItems: 'center' }}>
-                          <b style={{ flex: 1, fontSize: 12.5 }}>{ex.name}</b>
-                          <input style={{ width: 46 }} type="number" value={ex.sets}
+                          <input style={{ flex: 1, minWidth: 110 }} value={ex.name} placeholder="动作名称"
+                            onChange={(e) => patchEx(i, ei, 'name', e.target.value)} title="动作名称" />
+                          <select style={{ width: 74 }} value={ex.part}
+                            onChange={(e) => patchEx(i, ei, 'part', e.target.value)} title="部位">
+                            {content.parts.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                          </select>
+                          <input style={{ width: 52 }} type="number" value={ex.sets}
                             onChange={(e) => patchEx(i, ei, 'sets', Number(e.target.value))} title="组数" />
-                          <input style={{ width: 64 }} value={ex.reps}
+                          <input style={{ width: 62 }} value={ex.reps}
                             onChange={(e) => patchEx(i, ei, 'reps', e.target.value)} title="次数" />
-                          <input style={{ width: 64 }} type="number" step="0.5" value={ex.weight}
+                          <input style={{ width: 62 }} type="number" step="0.5" value={ex.weight}
                             onChange={(e) => patchEx(i, ei, 'weight', Number(e.target.value))} title="负重kg" />
+                          <button className="btn btn-danger btn-sm" style={{ padding: '6px 9px' }}
+                            onClick={() => removeEx(i, ei)} title="删除动作">×</button>
                         </div>
                       ))}
+                      <div className="flex gap6">
+                        <button className="btn btn-ghost btn-sm" onClick={() => addEx(i)}>+ 自定义动作</button>
+                        <select value="" style={{ width: 'auto', flex: 'none' }}
+                          onChange={(e) => { if (e.target.value) addExFromLibrary(i, e.target.value); e.target.value = '' }}>
+                          <option value="">从动作库添加…</option>
+                          {content.parts.map((p) => <option key={p.key} value={p.key}>＋ {p.label}</option>)}
+                        </select>
+                      </div>
                     </td>
                     <td style={{ minWidth: 120 }}>
                       <input value={u.note} onChange={(e) => patchUnit(i, 'note', e.target.value)} placeholder="单元备注" />

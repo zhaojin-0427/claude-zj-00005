@@ -331,8 +331,10 @@ def register_session(booking_id: int, body: SessionIn, db: Session = Depends(get
     # 关联周期计划单元: 冻结不受计划/模板后续修改影响的执行快照, 计算完成率与训练量
     comparison = None
     if b.plan_unit:
-        # 首次完课后单元状态即 completed, planned 内容已锁定, 重算仅更新实际值
-        comparison = plansvc.snapshot_completed_unit(b.plan_unit, sess)
+        # 首次完课后单元状态即 completed, planned 内容已锁定, 重算仅更新实际值;
+        # 快照时间取实际上课时间（支持开课后补录历史课程）
+        comparison = plansvc.snapshot_completed_unit(
+            b.plan_unit, sess, snap_time=b.slot.start_time)
         db.commit()
     # 登记完后自动评估目标达成
     reminders = evaluate_goals(b.member_id, db)

@@ -4,7 +4,7 @@ import { useAuth } from '../auth'
 import { useToast } from '../toast'
 import { Modal, Loading } from '../components/ui'
 import { Brief, ContentBundle, ExerciseItem, Goal, PlanTemplate, TrainingSession, Workbench } from '../types'
-import { fmtDateTime, parseExercises, STATUS_CLS, weekdayLabel, totalVolume, fmtVolume } from '../utils'
+import { fmtDateTime, parseExercises, STATUS_CLS, weekdayLabel, totalVolume, fmtVolume, unitTitle } from '../utils'
 
 export default function CoachDesk() {
   const { user } = useAuth()
@@ -74,7 +74,7 @@ export default function CoachDesk() {
                       <tr key={o.plan_id}>
                         <td><b>{o.member_name}</b></td>
                         <td style={{ fontSize: 12.5 }}>{o.plan_name}<div className="faint">{o.weeks} 周周期</div></td>
-                        <td>{o.completed_units}/{o.total_units} 单元</td>
+                        <td>{o.completed_units}/{o.due_units} 应执行</td>
                         <td><span className="tag tag-red">{o.completion_rate}%</span></td>
                       </tr>
                     ))}
@@ -125,7 +125,7 @@ export default function CoachDesk() {
                     </td>
                     <td>{b.goal_label}<div className="faint">{b.focus_parts_labels.join(' / ') || '全身'}</div>
                       {b.plan_unit && <div className="tag tag-purple mt8" style={{ width: 'fit-content' }}>
-                        🔁 {b.plan_unit.week_no ? `第${b.plan_unit.week_no}周·` : ''}{b.plan_unit.title || '周期单元'}
+                        🔁 {unitTitle(b.plan_unit)}
                       </div>}
                     </td>
                     <td style={{ maxWidth: 220 }}>

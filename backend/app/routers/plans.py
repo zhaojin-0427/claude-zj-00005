@@ -134,10 +134,13 @@ def my_upcoming_units(db: Session = Depends(get_db),
     ).all()
     units = []
     for p in plans:
+        coach = db.get(User, p.coach_id)
         for u in p.units:
             if u.status in (content.UNIT_UNSCHEDULED, content.UNIT_MISSED):
                 d = plan_unit_dict(u)
                 d["plan_name"] = p.name
+                d["coach_id"] = p.coach_id
+                d["coach_name"] = coach.full_name if coach else ""
                 units.append(d)
     units.sort(key=lambda x: x["scheduled_date"])
     return units

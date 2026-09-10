@@ -6,6 +6,7 @@ import {
 import { api } from '../api'
 import { Loading } from '../components/ui'
 import { DashboardStats } from '../types'
+import { fmtVolume } from '../utils'
 
 const PIE_COLORS = ['#22d3a7', '#60a5fa', '#f59e0b', '#a78bfa', '#f87171', '#34d399', '#f472b6', '#94a3bf']
 
@@ -88,11 +89,9 @@ export default function Stats() {
           <span className="ico">🏋️</span>
           <div className="label">实际总训练量</div>
           <div className="value" style={{ fontSize: 24, paddingTop: 4 }}>
-            {(data.plan_actual_volume ?? 0) >= 10000
-              ? `${((data.plan_actual_volume ?? 0) / 1000).toFixed(1)}t`
-              : `${Math.round(data.plan_actual_volume ?? 0)}`}<small> kg</small>
+            {fmtVolume(data.plan_actual_volume ?? 0)}
           </div>
-          <div className="foot">计划量 {((data.plan_planned_volume ?? 0) / 1000).toFixed(1)}t · 周期单元累计</div>
+          <div className="foot">计划量 {fmtVolume(data.plan_planned_volume ?? 0)} · 周期单元累计</div>
         </div>
         <div className="card stat purple">
           <span className="ico">📦</span>
